@@ -36,8 +36,8 @@ class _ExplicitTransformationTool(SensitiveGuardTool):
     action: Action
     handles_sensitive_input = True
 
-    def __init__(self, *, detector: Any, transformer: Any, context: Any) -> None:
-        super().__init__(gateway=None, context=context)
+    def __init__(self, *, detector: Any, transformer: Any, context: Any, gateway: Any = None) -> None:
+        super().__init__(gateway=gateway, context=context)
         self.detector = detector
         self.transformer = transformer
 

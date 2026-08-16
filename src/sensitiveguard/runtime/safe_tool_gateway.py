@@ -115,6 +115,7 @@ class SafeToolGateway:
         authorization: AuthorizationPolicy | None = None,
         registry: ToolRegistry | None = None,
         approval_callback: Callable[[DecisionSet, Any, str], bool] | None = None,
+        lineage_tracker: Any | None = None,
     ) -> None:
         self.detector = detector
         self.policy_engine = policy_engine
@@ -124,6 +125,7 @@ class SafeToolGateway:
         self.authorization = authorization or AuthorizationPolicy()
         self.registry = registry or ToolRegistry()
         self.approval_callback = approval_callback
+        self.lineage_tracker = lineage_tracker
 
     def guard_text(
         self,
@@ -138,7 +140,7 @@ class SafeToolGateway:
     ) -> GuardResult:
         if not isinstance(content, str):
             raise TypeError("guard_text expects a string")
-        return self._guard_payload(
+        result = self._guard_payload(
             content,
             context,
             stage,
@@ -147,6 +149,14 @@ class SafeToolGateway:
             tool_name=tool_name,
             record_disclosure=record_disclosure,
             field_label=None,
+        )
+        return self._record_lineage(
+            content,
+            result,
+            context,
+            stage,
+            tool_name=tool_name,
+            destination=destination,
         )
 
     def guard_payload(
@@ -160,7 +170,7 @@ class SafeToolGateway:
         tool_name: str | None = None,
         record_disclosure: bool | None = None,
     ) -> GuardResult:
-        return self._guard_payload(
+        result = self._guard_payload(
             payload,
             context,
             stage,
@@ -170,6 +180,56 @@ class SafeToolGateway:
             record_disclosure=record_disclosure,
             field_label=None,
         )
+        return self._record_lineage(
+            payload,
+            result,
+            context,
+            stage,
+            tool_name=tool_name,
+            destination=destination,
+        )
+
+    def _record_lineage(
+        self,
+        payload: Any,
+        result: GuardResult,
+        context: Any,
+        stage: GuardStage,
+        *,
+        tool_name: str | None,
+        destination: str | None,
+    ) -> GuardResult:
+        if self.lineage_tracker is None:
+            return result
+        try:
+            self.lineage_tracker.record_guard(
+                payload,
+                result.content if result.allowed else None,
+                context,
+                stage,
+                tool_name,
+                destination or getattr(context, "destination", None),
+                result.detection,
+                result.decisions,
+                result.status,
+            )
+        except Exception:
+            if result.allowed:
+                self._audit_failure(
+                    context,
+                    stage,
+                    destination or getattr(context, "destination", None) or "unknown",
+                    tool_name,
+                    "LINEAGE_RECORD_FAILED",
+                    "Data lineage could not be recorded; the operation was denied.",
+                )
+                return GuardResult(
+                    status=GuardStatus.BLOCKED,
+                    detection=result.detection,
+                    decisions=result.decisions,
+                    reason="Data lineage could not be recorded; the operation was denied.",
+                )
+        return result
 
     def _guard_payload(
         self,

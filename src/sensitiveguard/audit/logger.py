@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import secrets
 import time
 from collections.abc import Iterable, Mapping
 from pathlib import Path
@@ -23,21 +24,17 @@ from sensitiveguard.models import (
 
 from .event import AuditEvent
 from .metrics import AuditMetrics, compute_metrics
-from .sanitize import collect_raw_values, safe_json_value, scrub_string
-from .trajectory import build_trajectory_report
-
-
-_SAFE_METADATA_KEYS = frozenset(
-    {
-        "artifact_ref",
-        "entity_fingerprint",
-        "error_code",
-        "masked_preview",
-        "policy_id",
-        "value_fingerprint",
-        "value_hash",
-    }
+from .sanitize import (
+    audit_fingerprint,
+    collect_raw_values,
+    safe_event_type,
+    safe_json_value,
+    safe_label,
+    safe_metadata_token,
+    safe_run_id,
+    safe_stage,
 )
+from .trajectory import build_trajectory_report
 
 
 class AuditWriteError(RuntimeError):
@@ -54,11 +51,15 @@ class AuditLogger:
         default_run_id: str | None = None,
         fail_closed: bool = True,
         fsync: bool = False,
+        key: bytes | None = None,
     ) -> None:
         self.jsonl_path = Path(jsonl_path) if jsonl_path is not None else None
         self.default_run_id = default_run_id
         self.fail_closed = fail_closed
         self.fsync = fsync
+        self._key = key or secrets.token_bytes(32)
+        if len(self._key) < 32:
+            raise ValueError("AuditLogger key must contain at least 32 bytes")
         self._events: list[AuditEvent] = []
         self._next_steps: dict[str, int] = {}
         self._lock = RLock()
@@ -85,9 +86,10 @@ class AuditLogger:
         transformations: Iterable[Any] | None = None,
         risk: float | None = None,
     ) -> AuditEvent:
-        resolved_run_id = run_id or self.default_run_id
-        if not resolved_run_id:
+        raw_run_id = run_id or self.default_run_id
+        if not raw_run_id:
             raise ValueError("run_id must be provided either to AuditLogger or log()")
+        resolved_run_id = safe_run_id(str(raw_run_id), key=self._key)
         if findings is not None:
             if detection is not None:
                 raise ValueError("Use either detection or findings, not both")
@@ -114,25 +116,24 @@ class AuditLogger:
             extra_metadata["policy_id"] = policy_id
         if transformation_values is not None:
             extra_metadata["transformations"] = self._transformation_summaries(transformation_values, raw_values)
-        safe_metadata = self._safe_metadata(extra_metadata, raw_values)
-
         with self._lock:
             step_id = self._next_steps.get(resolved_run_id, 1)
             event = AuditEvent(
-                run_id=scrub_string(resolved_run_id, raw_values) or "[REDACTED]",
+                run_id=str(raw_run_id),
                 step_id=step_id,
                 timestamp=time.time(),
-                event_type=scrub_string(str(event_type), raw_values) or "guard",
+                event_type=safe_event_type(str(event_type)),
                 stage=self._normalize_stage(stage, raw_values),
-                tool=scrub_string(tool, raw_values),
-                destination=scrub_string(destination, raw_values),
+                tool=tool,
+                destination=destination,
                 sensitive_labels=labels,
                 detection=safe_detection,
                 decisions=safe_decisions,
                 status=resolved_status,
                 reason="[REDACTED:REASON]" if reason is not None else None,
                 risk=event_risk,
-                metadata=safe_metadata,
+                metadata=extra_metadata,
+                _sanitization_key=self._key,
             )
             write_failed = False
             try:
@@ -146,7 +147,8 @@ class AuditLogger:
                 raw_values = ()
                 transformation_values = explicit_labels = None
                 extra_metadata = {}
-                reason = None
+                run_id = raw_run_id = event_type = stage = tool = destination = None
+                action = decision = sensitive_labels = policy_id = risk = reason = None
                 raise AuditWriteError("Could not persist the privacy audit event.") from None
             self._events.append(event)
             self._next_steps[resolved_run_id] = step_id + 1
@@ -156,13 +158,15 @@ class AuditLogger:
         with self._lock:
             if run_id is None:
                 return tuple(self._events)
-            return tuple(event for event in self._events if event.run_id == run_id)
+            resolved = safe_run_id(str(run_id), key=self._key)
+            return tuple(event for event in self._events if event.run_id == resolved)
 
     def metrics(self, run_id: str | None = None) -> AuditMetrics:
         return compute_metrics(self.events(run_id))
 
     def report(self, run_id: str) -> dict[str, Any]:
-        return build_trajectory_report(self.events(run_id), run_id).to_dict()
+        resolved = safe_run_id(str(run_id), key=self._key)
+        return build_trajectory_report(self.events(run_id), resolved).to_dict()
 
     def clear_memory(self, run_id: str | None = None) -> None:
         """Clear the memory sink only; an existing JSONL audit trail is immutable."""
@@ -171,7 +175,8 @@ class AuditLogger:
             if run_id is None:
                 self._events.clear()
                 return
-            self._events = [event for event in self._events if event.run_id != run_id]
+            resolved = safe_run_id(str(run_id), key=self._key)
+            self._events = [event for event in self._events if event.run_id != resolved]
 
     def _append_jsonl(self, event: AuditEvent) -> None:
         if self.jsonl_path is None:
@@ -184,22 +189,6 @@ class AuditLogger:
             stream.flush()
             if self.fsync:
                 os.fsync(stream.fileno())
-
-    @staticmethod
-    def _safe_metadata(metadata: Mapping[str, Any], raw_values: tuple[str, ...]) -> dict[str, Any]:
-        safe: dict[str, Any] = {}
-        redacted_index = 0
-        for raw_key, value in metadata.items():
-            key = str(raw_key)
-            normalized = key.strip().lower()
-            if normalized == "transformations":
-                safe[normalized] = value
-            elif normalized in _SAFE_METADATA_KEYS:
-                safe[normalized] = safe_json_value(value, raw_values, key=normalized)
-            else:
-                redacted_index += 1
-                safe[f"redacted_field_{redacted_index}"] = "[REDACTED]"
-        return safe
 
     @staticmethod
     def _transformation_summaries(values: tuple[Any, ...], raw_values: tuple[str, ...]) -> list[dict[str, Any]]:
@@ -218,8 +207,8 @@ class AuditLogger:
             summaries.append(summary)
         return summaries
 
-    @staticmethod
     def _safe_detection(
+        self,
         detection: DetectionResult | Finding | Iterable[Finding] | Mapping[str, Any] | None,
         raw_values: tuple[str, ...],
     ) -> dict[str, Any] | None:
@@ -236,13 +225,38 @@ class AuditLogger:
             if not all(isinstance(finding, Finding) for finding in findings):
                 raise TypeError("detection iterable must contain only Finding objects")
             value = DetectionResult(findings).to_dict()
-        safe = safe_json_value(value, raw_values)
-        if not isinstance(safe, dict):
+        serialized = safe_json_value(value, raw_values)
+        if not isinstance(serialized, dict):
             raise TypeError("detection must serialize to an object")
-        return safe
+        findings: list[dict[str, Any]] = []
+        for item in serialized.get("findings", ()):
+            if not isinstance(item, Mapping):
+                continue
+            label = safe_label(str(item.get("label", "UNKNOWN")))
+            finding: dict[str, Any] = {"label": label}
+            for field_name in ("start", "end"):
+                field_value = item.get(field_name)
+                if isinstance(field_value, int) and not isinstance(field_value, bool) and field_value >= 0:
+                    finding[field_name] = field_value
+            score = item.get("score")
+            if isinstance(score, (int, float)) and not isinstance(score, bool) and math.isfinite(float(score)):
+                finding["score"] = max(0.0, min(float(score), 1.0))
+            severity = str(item.get("severity", "unknown")).lower()
+            finding["severity"] = severity if severity in {"low", "medium", "high", "critical"} else "unknown"
+            finding["detector"] = audit_fingerprint(item.get("detector", "unknown"), key=self._key, prefix="detector")
+            findings.append(finding)
+        counts: dict[str, int] = {}
+        for finding in findings:
+            label = finding["label"]
+            counts[label] = counts.get(label, 0) + 1
+        return {
+            "contains_sensitive_data": bool(findings),
+            "findings": findings,
+            "counts": dict(sorted(counts.items())),
+        }
 
-    @staticmethod
     def _safe_decisions(
+        self,
         decisions: DecisionSet | PolicyDecision | Iterable[PolicyDecision] | Mapping[str, Any] | None,
         raw_values: tuple[str, ...],
     ) -> dict[str, Any] | None:
@@ -259,10 +273,47 @@ class AuditLogger:
             if not all(isinstance(item, PolicyDecision) for item in policy_decisions):
                 raise TypeError("decisions iterable must contain only PolicyDecision objects")
             value = DecisionSet(policy_decisions).to_dict()
-        safe = safe_json_value(value, raw_values)
-        if not isinstance(safe, dict):
+        serialized = safe_json_value(value, raw_values)
+        if not isinstance(serialized, dict):
             raise TypeError("decisions must serialize to an object")
-        return safe
+        safe_decisions: list[dict[str, Any]] = []
+        allowed_actions = {item.value for item in Action}
+        for item in serialized.get("decisions", ()):
+            if not isinstance(item, Mapping):
+                continue
+            raw_finding = item.get("finding")
+            finding_container = {"findings": [raw_finding]} if isinstance(raw_finding, Mapping) else {"findings": []}
+            finding_values = self._safe_detection(finding_container, raw_values)["findings"]
+            if not finding_values:
+                continue
+            action_value = str(item.get("decision", "BLOCK")).upper()
+            safe_item: dict[str, Any] = {
+                "finding": finding_values[0],
+                "decision": action_value if action_value in allowed_actions else Action.BLOCK.value,
+                "reason": "[REDACTED:REASON]",
+                "policy_id": safe_metadata_token(item.get("policy_id", "unknown"), key=self._key, kind="policy_id"),
+                "severity": finding_values[0].get("severity", "unknown"),
+                "allowed_after_transform": bool(item.get("allowed_after_transform", False)),
+                "necessary": bool(item.get("necessary", False)),
+            }
+            raw_risk = item.get("risk")
+            if isinstance(raw_risk, Mapping):
+                risk_values = {}
+                for key in ("score", "sensitivity", "destination", "non_necessity", "exposure", "combination"):
+                    number = raw_risk.get(key)
+                    if (
+                        isinstance(number, (int, float))
+                        and not isinstance(number, bool)
+                        and math.isfinite(float(number))
+                    ):
+                        risk_values[key] = max(0.0, float(number))
+                safe_item["risk"] = risk_values
+            safe_decisions.append(safe_item)
+        return {
+            "decisions": safe_decisions,
+            "has_block": any(item["decision"] == Action.BLOCK.value for item in safe_decisions),
+            "requires_approval": any(item["decision"] == Action.REQUIRE_APPROVAL.value for item in safe_decisions),
+        }
 
     @staticmethod
     def _labels(
@@ -270,16 +321,16 @@ class AuditLogger:
         decisions: dict[str, Any] | None,
         explicit: Iterable[str] | None,
     ) -> tuple[str, ...]:
-        labels = {str(label).upper() for label in (explicit or ())}
+        labels = {safe_label(str(label)) for label in (explicit or ())}
         if detection:
             labels.update(
-                str(finding["label"]).upper()
+                safe_label(str(finding["label"]))
                 for finding in detection.get("findings", ())
                 if isinstance(finding, dict) and finding.get("label")
             )
         if decisions:
             labels.update(
-                str(decision["finding"]["label"]).upper()
+                safe_label(str(decision["finding"]["label"]))
                 for decision in decisions.get("decisions", ())
                 if isinstance(decision, dict)
                 and isinstance(decision.get("finding"), dict)
@@ -338,7 +389,8 @@ class AuditLogger:
 
     @staticmethod
     def _normalize_stage(stage: GuardStage | str | None, raw_values: tuple[str, ...]) -> str | None:
+        del raw_values
         if stage is None:
             return None
         value = stage.value if isinstance(stage, GuardStage) else str(stage)
-        return scrub_string(value, raw_values)
+        return safe_stage(value)

@@ -1,6 +1,6 @@
 from .access import SafeQueryDatabaseTool, SafeRetrieveRAGTool
-from .audit import AuditPrivacyTrajectoryTool
-from .base import SensitiveGuardTool
+from .audit import AuditPrivacyTrajectoryTool, TraceDataLineageTool
+from .base import SensitiveGuardTool, ToolExecutionOutcome
 from .detection import DetectSensitiveDataTool, EvaluateDataPolicyTool
 from .egress import SafeHTTPPostTool, SafeLLMCallTool, SafeSendEmailTool, SafeSendMessageTool
 from .files import (
@@ -13,6 +13,7 @@ from .files import (
     VerifySanitizedFileTool,
 )
 from .final_answer import FinalAnswerGuardTool
+from .shell import SafeCommandTool, SafeRunCommandTool, SafeShellTool
 from .transformation import (
     MaskTextTool,
     PseudonymizeTextTool,
@@ -37,6 +38,9 @@ __all__ = [
     "SafeQueryDatabaseTool",
     "SafeReadFileTool",
     "SafeRetrieveRAGTool",
+    "SafeCommandTool",
+    "SafeRunCommandTool",
+    "SafeShellTool",
     "SafeSendEmailTool",
     "SafeSendMessageTool",
     "SanitizeTextTool",
@@ -45,5 +49,7 @@ __all__ = [
     "ScanFileTool",
     "SensitiveGuardTool",
     "TokenizeSensitiveDataTool",
+    "ToolExecutionOutcome",
+    "TraceDataLineageTool",
     "VerifySanitizedFileTool",
 ]

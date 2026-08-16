@@ -8,7 +8,17 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Any
 
-from .sanitize import collect_raw_values, safe_json_value, scrub_string
+from .sanitize import (
+    safe_audit_metadata,
+    safe_decisions_summary,
+    safe_destination,
+    safe_detection_summary,
+    safe_event_type,
+    safe_label,
+    safe_run_id,
+    safe_stage,
+    safe_tool_name,
+)
 
 
 def _freeze(value: Any) -> Any:
@@ -45,6 +55,7 @@ class AuditEvent:
     reason: str | None = None
     risk: float = 0.0
     metadata: Mapping[str, Any] = field(default_factory=dict, repr=False)
+    _sanitization_key: bytes | None = field(default=None, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if self.step_id < 1:
@@ -53,20 +64,28 @@ class AuditEvent:
             raise ValueError("timestamp must be finite")
         if not math.isfinite(self.risk) or self.risk < 0:
             raise ValueError("risk must be finite and non-negative")
-        raw_values = collect_raw_values(self.detection, self.decisions, self.metadata)
-        safe_detection = safe_json_value(self.detection, raw_values)
-        safe_decisions = safe_json_value(self.decisions, raw_values)
-        safe_metadata = safe_json_value(self.metadata, raw_values)
-        object.__setattr__(self, "run_id", scrub_string(self.run_id, raw_values) or "[REDACTED]")
-        object.__setattr__(self, "event_type", scrub_string(self.event_type, raw_values) or "guard")
-        object.__setattr__(self, "stage", scrub_string(self.stage, raw_values))
-        object.__setattr__(self, "tool", scrub_string(self.tool, raw_values))
-        object.__setattr__(self, "destination", scrub_string(self.destination, raw_values))
+        key = self._sanitization_key
+        if key is not None and (not isinstance(key, bytes) or len(key) < 16):
+            raise ValueError("AuditEvent sanitization key must contain at least 16 bytes")
+        safe_detection = safe_detection_summary(self.detection, key=key)
+        safe_decisions = safe_decisions_summary(self.decisions, key=key)
+        safe_metadata = safe_audit_metadata(self.metadata, key=key)
+        safe_statuses = {"ALLOWED", "APPROVAL_REQUIRED", "BLOCKED", "TRANSFORMED"}
+        safe_status = str(self.status).upper()
+        object.__setattr__(self, "run_id", safe_run_id(self.run_id, key=key))
+        object.__setattr__(self, "event_type", safe_event_type(self.event_type))
+        object.__setattr__(self, "stage", safe_stage(self.stage))
+        object.__setattr__(self, "tool", safe_tool_name(self.tool, key=key))
+        object.__setattr__(self, "destination", safe_destination(self.destination, key=key))
+        object.__setattr__(self, "status", safe_status if safe_status in safe_statuses else "BLOCKED")
         object.__setattr__(self, "reason", "[REDACTED:REASON]" if self.reason is not None else None)
-        object.__setattr__(self, "sensitive_labels", tuple(self.sensitive_labels))
+        object.__setattr__(
+            self, "sensitive_labels", tuple(sorted({safe_label(label) for label in self.sensitive_labels}))
+        )
         object.__setattr__(self, "detection", _freeze(safe_detection) if safe_detection is not None else None)
         object.__setattr__(self, "decisions", _freeze(safe_decisions) if safe_decisions is not None else None)
         object.__setattr__(self, "metadata", _freeze(safe_metadata))
+        object.__setattr__(self, "_sanitization_key", None)
 
     def to_dict(self) -> dict[str, Any]:
         return {

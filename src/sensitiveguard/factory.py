@@ -11,14 +11,22 @@ from sensitiveguard.agent import SensitiveToolCallingAgent
 from sensitiveguard.audit import AuditLogger
 from sensitiveguard.detector import (
     CompositeDetector,
+    EncodedPayloadDetector,
     GLiNERDetector,
     InjectionDetector,
+    NormalizationDetector,
     RegexDetector,
     SecretDetector,
 )
+from sensitiveguard.intent import IntentGuard, IntentResolver
+from sensitiveguard.lineage import LineageTracker
 from sensitiveguard.policy import PolicyEngine, load_policy_config
 from sensitiveguard.privacy import DisclosureLedger, PrivacyContext
+from sensitiveguard.review import ExecutionPermitStore, SecurityReviewEngine
+from sensitiveguard.routing import EndpointDescriptor, PrivacyRouter
 from sensitiveguard.runtime import ApprovalStore, AuthorizationPolicy, SafeToolGateway
+from sensitiveguard.runtime.capability_manifest import CapabilityManifestRegistry
+from sensitiveguard.runtime.command import CommandCapability, CommandExecutor
 from sensitiveguard.tools import (
     AuditPrivacyTrajectoryTool,
     DetectSensitiveDataTool,
@@ -34,6 +42,7 @@ from sensitiveguard.tools import (
     SafeQueryDatabaseTool,
     SafeReadFileTool,
     SafeRetrieveRAGTool,
+    SafeRunCommandTool,
     SafeSendMessageTool,
     SanitizeFileTool,
     SanitizeTextTool,
@@ -41,6 +50,7 @@ from sensitiveguard.tools import (
     ScanFileTool,
     SensitiveGuardTool,
     TokenizeSensitiveDataTool,
+    TraceDataLineageTool,
     VerifySanitizedFileTool,
 )
 from sensitiveguard.transform import TransformationEngine
@@ -57,6 +67,13 @@ class SensitiveGuardRuntime:
     authorization: AuthorizationPolicy
     approval_store: ApprovalStore
     gateway: SafeToolGateway
+    lineage_tracker: LineageTracker
+    intent_resolver: IntentResolver
+    intent_guard: IntentGuard
+    privacy_router: PrivacyRouter
+    capability_manifests: CapabilityManifestRegistry
+    execution_permits: ExecutionPermitStore
+    security_reviewer: SecurityReviewEngine
 
     @classmethod
     def create(
@@ -79,10 +96,22 @@ class SensitiveGuardRuntime:
         audit_jsonl_path: str | Path | None = None,
         approval_callback: Callable[[Any, PrivacyContext, str], bool] | None = None,
         approval_ttl_seconds: float = 300.0,
+        endpoints: Iterable[EndpointDescriptor] = (),
+        audit_key: bytes | None = None,
+        lineage_key: bytes | None = None,
+        intent_key: bytes | None = None,
+        routing_key: bytes | None = None,
+        execution_permit_key: bytes | None = None,
+        execution_permit_ttl_seconds: float = 30.0,
     ) -> SensitiveGuardRuntime:
         if not isinstance(context, PrivacyContext):
             raise TypeError("SensitiveGuardRuntime.create expects a PrivacyContext")
-        detector_chain: list[Any] = [RegexDetector(), SecretDetector(), InjectionDetector()]
+        lexical_detector = CompositeDetector([RegexDetector(), SecretDetector(), InjectionDetector()])
+        detector_chain: list[Any] = [
+            lexical_detector,
+            NormalizationDetector(lexical_detector),
+            EncodedPayloadDetector(lexical_detector),
+        ]
         if gliner_model is not None or gliner_model_path is not None or gliner_model_factory is not None:
             detector_chain.insert(
                 0,
@@ -118,7 +147,21 @@ class SensitiveGuardRuntime:
             default_budget=default_privacy_budget,
             destination_budgets=destination_budgets,
         )
-        audit_logger = AuditLogger(audit_jsonl_path, default_run_id=context.run_id, fail_closed=True)
+        audit_logger = AuditLogger(
+            audit_jsonl_path,
+            default_run_id=context.run_id,
+            fail_closed=True,
+            key=audit_key,
+        )
+        lineage_tracker = LineageTracker(key=lineage_key)
+        intent_resolver = IntentResolver(key=intent_key)
+        intent_guard = intent_resolver.intent_guard()
+        privacy_router = PrivacyRouter(endpoints=endpoints, key=routing_key)
+        capability_manifests = CapabilityManifestRegistry()
+        execution_permits = ExecutionPermitStore(
+            key=execution_permit_key,
+            ttl_seconds=execution_permit_ttl_seconds,
+        )
         authorization = AuthorizationPolicy(
             allowed_roots=tuple(allowed_roots),
             allowed_http_hosts=http_hosts,
@@ -137,6 +180,18 @@ class SensitiveGuardRuntime:
             audit_logger=audit_logger,
             authorization=authorization,
             approval_callback=approval_callback or approval_store,
+            lineage_tracker=lineage_tracker,
+        )
+        security_reviewer = SecurityReviewEngine(
+            router=privacy_router,
+            intent_guard=intent_guard,
+            manifests=capability_manifests,
+            permits=execution_permits,
+            lineage_tracker=lineage_tracker,
+            audit_logger=audit_logger,
+            gateway=gateway,
+            context=context,
+            policy_version=policy_engine.policy_version,
         )
         return cls(
             context=context,
@@ -148,6 +203,13 @@ class SensitiveGuardRuntime:
             authorization=authorization,
             approval_store=approval_store,
             gateway=gateway,
+            lineage_tracker=lineage_tracker,
+            intent_resolver=intent_resolver,
+            intent_guard=intent_guard,
+            privacy_router=privacy_router,
+            capability_manifests=capability_manifests,
+            execution_permits=execution_permits,
+            security_reviewer=security_reviewer,
         )
 
     def build_tools(
@@ -161,16 +223,40 @@ class SensitiveGuardRuntime:
         rag_retriever: Callable[[str, int, tuple[str, ...]], Any] | None = None,
         max_file_bytes: int = 5_000_000,
         max_files: int = 1_000,
+        command_capabilities: Iterable[CommandCapability] = (),
+        command_executor: CommandExecutor | None = None,
+        command_fingerprint_key: bytes | None = None,
     ) -> list[SensitiveGuardTool]:
         tools: list[SensitiveGuardTool] = [
-            DetectSensitiveDataTool(detector=self.detector, context=self.context),
+            DetectSensitiveDataTool(detector=self.detector, context=self.context, gateway=self.gateway),
             EvaluateDataPolicyTool(gateway=self.gateway, context=self.context),
             SanitizeTextTool(gateway=self.gateway, context=self.context),
-            MaskTextTool(detector=self.detector, transformer=self.transformer, context=self.context),
-            RedactTextTool(detector=self.detector, transformer=self.transformer, context=self.context),
-            PseudonymizeTextTool(detector=self.detector, transformer=self.transformer, context=self.context),
-            TokenizeSensitiveDataTool(detector=self.detector, transformer=self.transformer, context=self.context),
+            MaskTextTool(
+                detector=self.detector,
+                transformer=self.transformer,
+                context=self.context,
+                gateway=self.gateway,
+            ),
+            RedactTextTool(
+                detector=self.detector,
+                transformer=self.transformer,
+                context=self.context,
+                gateway=self.gateway,
+            ),
+            PseudonymizeTextTool(
+                detector=self.detector,
+                transformer=self.transformer,
+                context=self.context,
+                gateway=self.gateway,
+            ),
+            TokenizeSensitiveDataTool(
+                detector=self.detector,
+                transformer=self.transformer,
+                context=self.context,
+                gateway=self.gateway,
+            ),
             AuditPrivacyTrajectoryTool(gateway=self.gateway, context=self.context),
+            TraceDataLineageTool(gateway=self.gateway, context=self.context),
             FinalAnswerGuardTool(gateway=self.gateway, context=self.context),
         ]
         if self.authorization.allowed_roots:
@@ -225,6 +311,20 @@ class SensitiveGuardRuntime:
                     retriever=rag_retriever,
                 )
             )
+        capability_values = tuple(command_capabilities)
+        if bool(capability_values) != (command_executor is not None):
+            raise ValueError("Command capabilities and a sandbox executor must be configured together")
+        if capability_values and command_executor is not None:
+            tools.append(
+                SafeRunCommandTool(
+                    gateway=self.gateway,
+                    context=self.context,
+                    authorization=self.authorization,
+                    capabilities=capability_values,
+                    executor=command_executor,
+                    fingerprint_key=command_fingerprint_key,
+                )
+            )
         return tools
 
     def create_agent(
@@ -241,6 +341,8 @@ class SensitiveGuardRuntime:
             gateway=self.gateway,
             privacy_context=self.context,
             model_destination=model_destination,
+            intent_resolver=self.intent_resolver,
+            security_reviewer=self.security_reviewer,
             **agent_kwargs,
         )
 

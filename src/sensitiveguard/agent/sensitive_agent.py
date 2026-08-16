@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import re
 import time
-from collections.abc import Generator
+from collections.abc import Generator, Mapping
 from typing import Any
 
 from sensitiveguard.memory import MemoryGuard
 from sensitiveguard.models import GuardStage
 from sensitiveguard.runtime.error_model import SensitiveGuardError
 from sensitiveguard.tools import FinalAnswerGuardTool, SensitiveGuardTool
+from sensitiveguard.tools.base import ToolExecutionOutcome
 from smolagents.agents import ActionOutput, ToolCallingAgent, ToolOutput
 from smolagents.memory import ActionStep, FinalAnswerStep, ToolCall
 from smolagents.models import ChatMessage, MessageRole, parse_json_if_needed
@@ -62,6 +63,9 @@ class SensitiveToolCallingAgent(ToolCallingAgent):
         gateway: Any,
         privacy_context: Any,
         model_destination: str = "external_llm",
+        model_endpoint_id: str | None = None,
+        intent_resolver: Any | None = None,
+        security_reviewer: Any | None = None,
         instructions: str | None = None,
         **kwargs: Any,
     ) -> None:
@@ -77,8 +81,19 @@ class SensitiveToolCallingAgent(ToolCallingAgent):
             raise ValueError("Base tools cannot be added to SensitiveToolCallingAgent")
         if kwargs.pop("max_tool_threads", 1) not in {None, 1}:
             raise ValueError("SensitiveToolCallingAgent executes guarded calls sequentially")
+        if intent_resolver is None or security_reviewer is None:
+            raise ValueError(
+                "SensitiveToolCallingAgent requires the runtime intent resolver and security reviewer; "
+                "construct it through SensitiveGuardRuntime.create_agent()."
+            )
+        if getattr(security_reviewer, "gateway", None) is not gateway:
+            raise ValueError("The security reviewer is bound to a different SensitiveGuard gateway")
+        if getattr(security_reviewer, "context", None) is not privacy_context:
+            raise ValueError("The security reviewer is bound to a different privacy context")
         if any(not isinstance(tool, SensitiveGuardTool) for tool in tools):
             raise TypeError("Every exposed tool must inherit SensitiveGuardTool")
+        if any(tool.gateway is not gateway or tool.context is not privacy_context for tool in tools):
+            raise ValueError("Every exposed tool must be bound to this Agent's exact gateway and privacy context")
         if any(tool.name == "final_answer" and not isinstance(tool, FinalAnswerGuardTool) for tool in tools):
             raise TypeError("The final_answer tool must be FinalAnswerGuardTool")
 
@@ -108,6 +123,12 @@ class SensitiveToolCallingAgent(ToolCallingAgent):
         self.gateway = gateway
         self.privacy_context = privacy_context
         self.model_destination = model_destination
+        self.model_endpoint_id = model_endpoint_id
+        self.intent_resolver = intent_resolver
+        self.security_reviewer = security_reviewer
+        self._active_intent = None
+        if self.security_reviewer is not None:
+            self.security_reviewer.register_tools(guarded_tools)
         super().__init__(
             tools=guarded_tools,
             model=model,
@@ -133,6 +154,15 @@ class SensitiveToolCallingAgent(ToolCallingAgent):
     ) -> Any:
         if images:
             raise ValueError("SensitiveToolCallingAgent requires an OCR/vision guard before accepting images")
+        if self.intent_resolver is not None:
+            self._active_intent = None
+            try:
+                self._active_intent = self.intent_resolver.resolve(
+                    self.privacy_context,
+                    version=getattr(self.privacy_context, "intent_version", 1),
+                )
+            except Exception:
+                return self._blocked_run_result(stream, "The trusted intent could not be established.")
         guarded_task = self.gateway.guard_text(
             task,
             self.privacy_context,
@@ -143,6 +173,21 @@ class SensitiveToolCallingAgent(ToolCallingAgent):
         )
         if not guarded_task.allowed:
             return self._blocked_run_result(stream, guarded_task.reason)
+        if self.model_endpoint_id is not None:
+            if self.security_reviewer is None:
+                return self._blocked_run_result(stream, "The configured model route cannot be verified.")
+            route = self.security_reviewer.router.route_model(
+                guarded_task.detection,
+                operation="model_inference",
+                preferred_endpoint=self.model_endpoint_id,
+                allow_external_fallback=False,
+            )
+            if (
+                not route.allowed
+                or route.endpoint_id != self.model_endpoint_id
+                or route.destination != self.model_destination
+            ):
+                return self._blocked_run_result(stream, "The configured model route is not authorized.")
 
         safe_args = None
         if additional_args:
@@ -371,20 +416,109 @@ class SensitiveToolCallingAgent(ToolCallingAgent):
                 ) from None
             safe_state_arguments = guarded_arguments.content
 
+        review = None
+        if self.security_reviewer is not None:
+            if self._active_intent is None:
+                arguments = {}
+                safe_state_arguments = {}
+                raise AgentToolExecutionError(
+                    "The tool call has no active trusted intent.",
+                    self.logger,
+                ) from None
+            try:
+                review = self.security_reviewer.preflight(
+                    tool,
+                    safe_state_arguments,
+                    self.privacy_context,
+                    self._active_intent,
+                )
+                permitted = review.allowed and self.security_reviewer.consume(
+                    review,
+                    tool,
+                    safe_state_arguments,
+                    self.privacy_context,
+                    self._active_intent,
+                )
+            except Exception:
+                permitted = False
+            if not permitted:
+                arguments = {}
+                safe_state_arguments = {}
+                raise AgentToolExecutionError(
+                    "The tool call failed deterministic security review.",
+                    self.logger,
+                ) from None
+
         execution_failed = False
+        tool_result: Any = None
+        tool.reset_execution_outcome()
         try:
             if isinstance(safe_state_arguments, dict):
-                return tool(**safe_state_arguments, sanitize_inputs_outputs=False)
-            return tool(safe_state_arguments, sanitize_inputs_outputs=False)
+                tool_result = tool(**safe_state_arguments, sanitize_inputs_outputs=False)
+            else:
+                tool_result = tool(safe_state_arguments, sanitize_inputs_outputs=False)
         except Exception:
             execution_failed = True
         if execution_failed:
+            if review is not None:
+                try:
+                    manifest = self.security_reviewer.manifests.get(tool_name)
+                    self.security_reviewer.fail(review, self.privacy_context, indeterminate=manifest.side_effect)
+                except Exception:
+                    pass
             arguments = {}
             safe_state_arguments = {}
+            tool_result = None
             raise AgentToolExecutionError(
                 "A protected tool failed without exposing its arguments.",
                 self.logger,
             ) from None
+        if review is not None:
+            result_status = self._protected_result_status(tool_result)
+            if result_status in {
+                "APPROVAL_REQUIRED",
+                "BLOCKED",
+                "FAILED",
+                "INCOMPLETE",
+                "SKIPPED",
+                "WITHHELD",
+            }:
+                manifest = self.security_reviewer.manifests.get(tool_name)
+                outcome = tool.execution_outcome
+                if outcome is ToolExecutionOutcome.COMPLETED:
+                    recorded = self.security_reviewer.complete(review, tool_result, self.privacy_context)
+                else:
+                    possibly_started = manifest.side_effect and (
+                        outcome in {ToolExecutionOutcome.STARTED, ToolExecutionOutcome.UNKNOWN}
+                        or (
+                            result_status not in {"APPROVAL_REQUIRED", "SKIPPED"} and not tool.tracks_execution_outcome
+                        )
+                    )
+                    recorded = self.security_reviewer.fail(
+                        review,
+                        self.privacy_context,
+                        indeterminate=possibly_started,
+                    )
+            else:
+                recorded = self.security_reviewer.complete(review, tool_result, self.privacy_context)
+            if not recorded:
+                arguments = {}
+                safe_state_arguments = {}
+                tool_result = None
+                raise AgentToolExecutionError(
+                    "The protected tool outcome could not be committed to data lineage.",
+                    self.logger,
+                ) from None
+        return tool_result
+
+    @staticmethod
+    def _protected_result_status(result: Any) -> str | None:
+        if not isinstance(result, Mapping):
+            return None
+        value = result.get("status")
+        if value is None:
+            return None
+        return str(getattr(value, "value", value)).strip().upper()
 
     def _handle_max_steps_reached(self, task: str) -> Any:
         start_time = time.time()

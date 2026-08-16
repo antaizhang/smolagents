@@ -16,11 +16,11 @@ class DetectSensitiveDataTool(SensitiveGuardTool):
     output_type = "object"
     handles_sensitive_input = True
 
-    def __init__(self, *, detector: Any, context: Any) -> None:
+    def __init__(self, *, detector: Any, context: Any, gateway: Any = None) -> None:
         # Detection is local and does not need a gateway invocation.
         self.detector = detector
         self.context = context
-        super().__init__(gateway=None, context=context)
+        super().__init__(gateway=gateway, context=context)
 
     def forward(self, text: str) -> dict[str, Any]:
         return self.detector.detect(text, context=self.context).to_dict()

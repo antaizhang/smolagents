@@ -31,10 +31,12 @@ class SafeLLMCallTool(SensitiveGuardTool):
         destination: str = "external_llm",
     ) -> None:
         super().__init__(gateway=gateway, context=context)
+        self._tracks_execution_outcome = True
         self._client = client
         self.destination = destination
 
     def forward(self, text: str, purpose: str) -> dict[str, Any]:
+        self.reset_execution_outcome()
         if purpose != self.context.purpose:
             return self.safe_block("The requested purpose does not match the host-authorized privacy context.")
         guarded = self.gateway.guard_text(
@@ -49,7 +51,9 @@ class SafeLLMCallTool(SensitiveGuardTool):
         if not guarded.allowed:
             return self.result_payload(guarded)
         try:
+            self.mark_execution_started()
             response = self._client(guarded.content)
+            self.mark_execution_completed()
         except Exception:
             return {"status": "FAILED", "reason": "The protected external LLM call failed."}
         observation = self.gateway.guard_payload(
@@ -83,9 +87,11 @@ class SafeHTTPPostTool(SensitiveGuardTool):
         transport: Callable[[str, Any], Any],
     ) -> None:
         super().__init__(gateway=gateway, context=context)
+        self._tracks_execution_outcome = True
         self._transport = transport
 
     def forward(self, url: str, body: str | dict[str, Any]) -> dict[str, Any]:
+        self.reset_execution_outcome()
         hostname = (urlsplit(url).hostname or "unknown").lower().rstrip(".")
         destination = f"http:{hostname}"
         guarded = self.gateway.guard_payload(
@@ -106,7 +112,9 @@ class SafeHTTPPostTool(SensitiveGuardTool):
         except SensitiveGuardError as error:
             return self.safe_block(error.public_message)
         try:
+            self.mark_execution_started()
             response = self._transport(safe_url, safe_body)
+            self.mark_execution_completed()
         except Exception:
             return {"status": "FAILED", "reason": "The protected HTTP request failed."}
         observation = self.gateway.guard_payload(
@@ -141,10 +149,12 @@ class SafeSendMessageTool(SensitiveGuardTool):
         allowed_recipients: set[str] | frozenset[str],
     ) -> None:
         super().__init__(gateway=gateway, context=context)
+        self._tracks_execution_outcome = True
         self._sender = sender
         self.allowed_recipients = frozenset(item.casefold() for item in allowed_recipients)
 
     def forward(self, recipient: str, body: str) -> dict[str, Any]:
+        self.reset_execution_outcome()
         if recipient.casefold() not in self.allowed_recipients:
             return self.safe_block("The message recipient is not in the host allowlist.")
         domain = recipient.rsplit("@", 1)[-1].casefold() if "@" in recipient else "configured_recipient"
@@ -160,7 +170,9 @@ class SafeSendMessageTool(SensitiveGuardTool):
         if not guarded.allowed:
             return self.result_payload(guarded)
         try:
+            self.mark_execution_started()
             self._sender(recipient, guarded.content)
+            self.mark_execution_completed()
         except Exception:
             return {"status": "FAILED", "reason": "The protected message send failed."}
         return {

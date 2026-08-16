@@ -2,10 +2,18 @@
 
 from __future__ import annotations
 
+from enum import Enum
 from typing import Any
 
 from sensitiveguard.models import GuardResult, GuardStatus
 from smolagents import Tool
+
+
+class ToolExecutionOutcome(str, Enum):
+    UNKNOWN = "UNKNOWN"
+    NOT_STARTED = "NOT_STARTED"
+    STARTED = "STARTED"
+    COMPLETED = "COMPLETED"
 
 
 class SensitiveGuardTool(Tool):
@@ -18,6 +26,29 @@ class SensitiveGuardTool(Tool):
         super().__init__()
         self.gateway = gateway
         self.context = context
+        self._tracks_execution_outcome = False
+        self._execution_outcome = ToolExecutionOutcome.UNKNOWN
+
+    @property
+    def execution_outcome(self) -> ToolExecutionOutcome:
+        return self._execution_outcome
+
+    @property
+    def tracks_execution_outcome(self) -> bool:
+        return self._tracks_execution_outcome
+
+    def reset_execution_outcome(self) -> None:
+        self._execution_outcome = (
+            ToolExecutionOutcome.NOT_STARTED if self._tracks_execution_outcome else ToolExecutionOutcome.UNKNOWN
+        )
+
+    def mark_execution_started(self) -> None:
+        if self._tracks_execution_outcome:
+            self._execution_outcome = ToolExecutionOutcome.STARTED
+
+    def mark_execution_completed(self) -> None:
+        if self._tracks_execution_outcome:
+            self._execution_outcome = ToolExecutionOutcome.COMPLETED
 
     @staticmethod
     def result_payload(result: GuardResult) -> dict[str, Any]:
@@ -28,3 +59,6 @@ class SensitiveGuardTool(Tool):
     @staticmethod
     def safe_block(reason: str, *, status: GuardStatus = GuardStatus.BLOCKED) -> dict[str, Any]:
         return {"status": status.value, "reason": reason, "privacy_actions": []}
+
+
+__all__ = ["SensitiveGuardTool", "ToolExecutionOutcome"]

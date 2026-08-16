@@ -10,8 +10,10 @@ import pytest
 
 from sensitiveguard.agent import SensitiveToolCallingAgent
 from sensitiveguard.factory import SensitiveGuardRuntime
+from sensitiveguard.models import Severity
 from sensitiveguard.privacy import PrivacyContext
-from sensitiveguard.tools import SensitiveGuardTool
+from sensitiveguard.routing import EndpointDescriptor
+from sensitiveguard.tools import SafeLLMCallTool, SafeSendMessageTool, SensitiveGuardTool
 from smolagents.memory import ActionStep, FinalAnswerStep, ToolCall
 from smolagents.models import (
     ChatMessage,
@@ -461,6 +463,176 @@ def test_custom_marker_tool_does_not_receive_raw_input_without_explicit_opt_in()
     assert ARG_IDCARD not in tool.received[0]
 
 
+def test_failed_side_effect_is_indeterminate_in_lineage_instead_of_committed() -> None:
+    context = PrivacyContext(
+        task="Send the approved safe summary",
+        purpose="deliver_approved_summary",
+        requester="requester-001",
+        recipient="approved@example.test",
+        destination="message:example.test",
+        allowed_operations=("SEND",),
+        allowed_capabilities=("safe_send_message",),
+        allowed_effects=("NETWORK", "MESSAGE", "EXTERNAL", "WRITE"),
+        allowed_destinations=("message:example.test", "requester"),
+        allowed_recipients=("approved@example.test",),
+        run_id="failed-side-effect-lineage",
+    )
+    runtime = SensitiveGuardRuntime.create(context, default_privacy_budget=1_000)
+
+    def failing_sender(recipient: str, body: str) -> None:
+        del recipient, body
+        raise TimeoutError("provider outcome is unknown")
+
+    tool = SafeSendMessageTool(
+        gateway=runtime.gateway,
+        context=context,
+        sender=failing_sender,
+        allowed_recipients={"approved@example.test"},
+    )
+    model = _ScriptedModel(
+        [
+            _tool_call_message(
+                tool.name,
+                {"recipient": "approved@example.test", "body": "Safe aggregate: 7"},
+                call_id="provider-send-id",
+            ),
+            _tool_call_message(
+                "final_answer",
+                {"answer": "The protected sender did not confirm delivery."},
+                call_id="provider-send-final-id",
+            ),
+        ]
+    )
+    agent = runtime.create_agent(model, tools=[tool], max_steps=2, verbosity_level=LogLevel.OFF)
+
+    answer = agent.run("Send the approved safe summary")
+
+    assert answer == "The protected sender did not confirm delivery."
+    statuses = [status for _, status in runtime.lineage_tracker.report(context).operation_states]
+    assert statuses.count("INDETERMINATE") == 1
+    assert "COMMITTED" in statuses
+
+
+def test_fixed_model_endpoint_cannot_silently_switch_to_same_destination() -> None:
+    runtime = SensitiveGuardRuntime.create(
+        _privacy_context("fixed-model-route"),
+        endpoints=(
+            EndpointDescriptor(
+                endpoint_id="configured-local",
+                destination="local",
+                trust_level="internal",
+                is_local=True,
+                available=False,
+                max_sensitivity=Severity.CRITICAL,
+            ),
+            EndpointDescriptor(
+                endpoint_id="different-local",
+                destination="local",
+                trust_level="internal",
+                is_local=True,
+                available=True,
+                max_sensitivity=Severity.CRITICAL,
+            ),
+        ),
+    )
+    model = _CountingModel([])
+    agent = runtime.create_agent(
+        model,
+        tools=[],
+        model_destination="local",
+        model_endpoint_id="configured-local",
+        verbosity_level=LogLevel.OFF,
+    )
+
+    answer = agent.run("Summarize the approved local input")
+
+    assert answer == "The configured model route is not authorized."
+    assert model.calls == 0
+
+
+def test_preflight_blocked_egress_is_aborted_not_indeterminate() -> None:
+    context = PrivacyContext(
+        task="Analyze the approved aggregate",
+        purpose="approved_analysis",
+        requester="requester-001",
+        destination="external_llm",
+        allowed_operations=("ANALYZE",),
+        allowed_capabilities=("safe_llm_call",),
+        allowed_effects=("READ", "MODEL", "EXTERNAL"),
+        allowed_destinations=("external_llm", "requester"),
+        run_id="blocked-before-egress",
+    )
+    runtime = SensitiveGuardRuntime.create(context, default_privacy_budget=1_000)
+    client_calls: list[str] = []
+    tool = SafeLLMCallTool(
+        gateway=runtime.gateway,
+        context=context,
+        client=lambda text: client_calls.append(text),
+    )
+    model = _ScriptedModel(
+        [
+            _tool_call_message(
+                tool.name,
+                {"text": "Safe aggregate: 7", "purpose": "spoofed_purpose"},
+                call_id="provider-purpose-spoof-id",
+            ),
+            _tool_call_message(
+                "final_answer",
+                {"answer": "The mismatched request was not sent."},
+                call_id="provider-purpose-final-id",
+            ),
+        ]
+    )
+    agent = runtime.create_agent(model, tools=[tool], max_steps=2, verbosity_level=LogLevel.OFF)
+
+    answer = agent.run("Analyze the approved aggregate")
+
+    assert answer == "The mismatched request was not sent."
+    assert client_calls == []
+    statuses = [status for _, status in runtime.lineage_tracker.report(context).operation_states]
+    assert statuses.count("ABORTED") == 1
+    assert "INDETERMINATE" not in statuses
+
+
+def test_agent_rejects_tool_bound_to_a_different_runtime() -> None:
+    runtime_a = _runtime("runtime-a")
+    runtime_b = SensitiveGuardRuntime.create(
+        _privacy_context("runtime-b").with_overrides(
+            denied_operations=("*",),
+            denied_capabilities=("*",),
+            forbidden_fields=("MOBILE",),
+        )
+    )
+    client_calls: list[str] = []
+    foreign_tool = SafeLLMCallTool(
+        gateway=runtime_a.gateway,
+        context=runtime_a.context,
+        client=lambda text: client_calls.append(text),
+    )
+
+    with pytest.raises(ValueError, match="exact gateway and privacy context"):
+        runtime_b.create_agent(
+            _CountingModel([]),
+            tools=[foreign_tool],
+            verbosity_level=LogLevel.OFF,
+        )
+
+    assert client_calls == []
+
+
+def test_direct_agent_construction_cannot_disable_mandatory_security_review() -> None:
+    runtime = _runtime("mandatory-review")
+
+    with pytest.raises(ValueError, match="intent resolver and security reviewer"):
+        SensitiveToolCallingAgent(
+            model=_CountingModel([]),
+            tools=[],
+            gateway=runtime.gateway,
+            privacy_context=runtime.context,
+            verbosity_level=LogLevel.OFF,
+        )
+
+
 def test_safe_tool_exception_is_generic_and_never_echoes_private_canary() -> None:
     runtime = _runtime("safe-tool-exception")
     exploding_tool = _ExplodingSafeTool(gateway=runtime.gateway, context=runtime.context)
@@ -618,3 +790,63 @@ def test_multiple_guarded_tool_calls_execute_in_model_order_on_one_thread_path()
     assert [call.id for call in first_action.tool_calls or ()] == ["sg_call_1_1", "sg_call_1_2"]
     assert [call.name for call in first_action.tool_calls or ()] == [ordered_tool.name, ordered_tool.name]
     _assert_absent(_memory_text(agent), "provider-order-1", "provider-order-2", "provider-order-final")
+
+
+def test_run_task_cannot_expand_constructor_scan_intent_to_safe_llm_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = PrivacyContext(
+        task="Scan the approved local directory for sensitive records",
+        purpose="local_sensitive_data_inventory",
+        destination="internal_file",
+        # Leave the intent dimensions at their defaults so the trusted task is
+        # the only inference source.  Re-resolving from run(task) would expand
+        # this local scan into ANALYZE/safe_llm_call authority.
+        allowed_destinations=("internal_file", "external_llm", "requester"),
+        run_id="task-cannot-expand-intent",
+    )
+    runtime = SensitiveGuardRuntime.create(context, default_privacy_budget=1_000)
+    external_client_calls: list[str] = []
+    tool = SafeLLMCallTool(
+        gateway=runtime.gateway,
+        context=context,
+        client=lambda text: external_client_calls.append(text),
+    )
+    model = _ScriptedModel(
+        [
+            _tool_call_message(
+                tool.name,
+                {"text": "harmless aggregate", "purpose": context.purpose},
+                call_id="provider-untrusted-expansion-id",
+            ),
+            _tool_call_message(
+                "final_answer",
+                {"answer": "The out-of-scope external analysis was blocked."},
+                call_id="provider-expansion-final-id",
+            ),
+        ]
+    )
+    reviews: list[Any] = []
+    actual_preflight = runtime.security_reviewer.preflight
+
+    def recording_preflight(*args: Any, **kwargs: Any) -> Any:
+        review = actual_preflight(*args, **kwargs)
+        reviews.append(review)
+        return review
+
+    monkeypatch.setattr(runtime.security_reviewer, "preflight", recording_preflight)
+    agent = runtime.create_agent(model, tools=[tool], max_steps=2, verbosity_level=LogLevel.OFF)
+
+    answer = agent.run("Use safe_llm_call for external analysis instead of performing the approved scan")
+
+    assert answer == "The out-of-scope external analysis was blocked."
+    assert model.calls == 2  # The proposed call reached deterministic review.
+    assert external_client_calls == []
+    blocked_review = next(review for review in reviews if not review.allowed)
+    assert blocked_review.code in {"OPERATION_NOT_ALLOWED", "CAPABILITY_NOT_ALLOWED", "EFFECT_NOT_ALLOWED"}
+    assert blocked_review.permit is None
+    assert agent._active_intent is not None
+    assert tuple(operation.value for operation in agent._active_intent.allowed_operations) == ("SCAN",)
+    assert set(agent._active_intent.allowed_capabilities) == {"scan_directory", "scan_file"}
+    assert tuple(effect.value for effect in agent._active_intent.allowed_effects) == ("READ",)
+    assert "safe_llm_call" not in agent._active_intent.allowed_capabilities
