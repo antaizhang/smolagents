@@ -17,3 +17,26 @@ add a preloaded GLiNER model or a local-only model path through `SensitiveGuardR
 
 Real LLM, HTTP, database, RAG, email, and MCP clients must be injected by trusted host code. Never expose those raw
 clients as smolagents tools.
+
+## Benchmark suite
+
+The demos show three paths. The benchmark suite measures all eight of them across four baselines:
+
+```bash
+PYTHONPATH=src python -m sensitiveguard.eval
+```
+
+This runs 26 scenarios under B0 (raw smolagents), B1 (detection only), B2 (uniform redaction) and B3 (full
+SensitiveGuard), prints the comparison table, and exits non-zero if a graded baseline misses the acceptance bar — so
+the same command works as a CI gate. It needs no model and no network, and finishes in a few seconds.
+
+Useful flags:
+
+```bash
+python -m sensitiveguard.eval --benchmark PII-Injection --baseline B0 --baseline B3
+python -m sensitiveguard.eval --json report.json --no-gate
+python -m sensitiveguard.eval --dataset my_scenarios.jsonl
+```
+
+Leakage is judged by searching recorded sink traffic for the literal canary values the harness planted, not by asking
+the detector under test. A value the detector misses is therefore reported as a leak rather than hidden by the miss.
