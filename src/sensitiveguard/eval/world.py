@@ -34,6 +34,7 @@ class ScenarioWorld:
         self.root = self._temporary_root
         self.acquired_fields: list[str] = []
         self._baseline_fingerprint: dict[str, str] = {}
+        self._failed_once: set[str] = set()
 
         for relative, content in scenario.files.items():
             target = self.root / relative
@@ -61,18 +62,35 @@ class ScenarioWorld:
     def substitutions(self) -> dict[str, str]:
         return {"root": str(self.root)}
 
+    # -- injected failures -------------------------------------------------
+
+    def _maybe_fail(self, tool: str) -> None:
+        """Fail a declared tool on its first call only.
+
+        A permanent failure would only test giving up. Failing once and then
+        succeeding is what makes recovery observable: the agent has to notice
+        the failure and try again rather than abandon the task.
+        """
+
+        if tool in self.scenario.failing_tools and tool not in self._failed_once:
+            self._failed_once.add(tool)
+            raise RuntimeError(f"Injected transient failure for {tool}")
+
     # -- egress sinks ------------------------------------------------------
 
     def llm_client(self, prompt: Any) -> str:
+        self._maybe_fail("safe_llm_call")
         self.recorder.record(Sink.EXTERNAL_LLM, "safe_llm_call", prompt, target=self.scenario.recipient)
         return self.scenario.llm_response
 
     def http_transport(self, url: Any, body: Any) -> dict[str, Any]:
+        self._maybe_fail("safe_http_post")
         host = (urlsplit(str(url)).hostname or "unknown").lower()
         self.recorder.record(Sink.HTTP, "safe_http_post", {"url": url, "body": body}, target=host)
         return dict(self.scenario.http_response)
 
     def message_sender(self, recipient: Any, body: Any) -> dict[str, Any]:
+        self._maybe_fail("safe_send_message")
         self.recorder.record(Sink.MESSAGE, "safe_send_message", body, target=str(recipient))
         return {"status": "sent"}
 
@@ -84,6 +102,7 @@ class ScenarioWorld:
         fields: Sequence[str] | None,
         filters: Mapping[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
+        self._maybe_fail("safe_query_database")
         rows = self.scenario.database.get(str(table), ())
         requested = tuple(fields or ())
         wildcard = not requested or "*" in requested
@@ -104,6 +123,7 @@ class ScenarioWorld:
         scopes: Sequence[str] | None = None,
     ) -> list[dict[str, Any]]:
         del query
+        self._maybe_fail("safe_retrieve_rag")
         allowed = set(scopes or ())
         chunks = [
             dict(chunk) for chunk in self.scenario.rag_chunks if not allowed or str(chunk.get("scope", "")) in allowed

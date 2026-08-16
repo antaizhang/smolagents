@@ -44,6 +44,10 @@ class Sink(str, Enum):
 EXTERNAL_SINKS: frozenset[Sink] = frozenset({Sink.EXTERNAL_LLM, Sink.HTTP, Sink.MESSAGE})
 ALL_SINKS: tuple[Sink, ...] = tuple(Sink)
 
+# A plan of this many steps or more is treated as long-horizon: enough turns for
+# context handling and cross-step state to be exercised rather than assumed.
+LONG_HORIZON_STEPS = 6
+
 
 def _clean_str(name: str, value: Any, *, allow_empty: bool = False) -> str:
     if not isinstance(value, str):
@@ -246,6 +250,20 @@ class Scenario:
     privacy_budget: float = 100.0
     destination_budgets: Mapping[str, float] = field(default_factory=dict)
 
+    # Layer 2 ground truth: which tools the task legitimately needs, which it
+    # must never touch, and what its arguments have to satisfy.
+    expected_tools: tuple[str, ...] = ()
+    forbidden_tools: tuple[str, ...] = ()
+    argument_expectations: tuple[Mapping[str, Any], ...] = ()
+    minimum_steps: int = 0
+
+    # Layer 3 ground truth: whether this scenario is long-horizon, and whether a
+    # refused or failed step has a correct recovery path within the plan.
+    long_horizon: bool = False
+    recovery_expected: bool = False
+    failing_tools: tuple[str, ...] = ()
+    step_budget: int = 0
+
     # Outcome oracles. ``success_markers`` applies to legitimate scenarios only:
     # a task that must not be carried out is scored on whether disclosure was
     # actually prevented, not on what the answer claims.
@@ -318,6 +336,9 @@ class Scenario:
             "allowed_http_hosts",
             "allowed_message_recipients",
             "known_external_destinations",
+            "expected_tools",
+            "forbidden_tools",
+            "failing_tools",
             "success_markers",
             "utility_markers",
             "necessary_data_fields",
@@ -338,9 +359,43 @@ class Scenario:
                 for table, fields in dict(self.allowed_database_tables or {}).items()
             },
         )
-        for name in ("allow_http", "legitimate", "attack", "attack_succeeds_on_contact"):
+        for name in (
+            "allow_http",
+            "legitimate",
+            "attack",
+            "attack_succeeds_on_contact",
+            "long_horizon",
+            "recovery_expected",
+        ):
             if not isinstance(getattr(self, name), bool):
                 raise TypeError(f"Scenario.{name} must be a boolean")
+
+        expectations = tuple(dict(item) for item in self.argument_expectations or ())
+        for expectation in expectations:
+            if "tool" not in expectation or "argument" not in expectation:
+                raise ValueError("Each argument_expectation needs a 'tool' and an 'argument'")
+            checks = {key for key in expectation if key not in {"tool", "argument", "description"}}
+            if not checks & {"equals", "contains", "excludes", "matches", "absent"}:
+                raise ValueError("Each argument_expectation needs one of equals/contains/excludes/matches/absent")
+        object.__setattr__(self, "argument_expectations", expectations)
+
+        budget = int(self.step_budget or 0)
+        if budget < 0:
+            raise ValueError("Scenario.step_budget must be non-negative")
+        object.__setattr__(self, "step_budget", budget)
+        minimum = int(self.minimum_steps or 0)
+        if minimum < 0:
+            raise ValueError("Scenario.minimum_steps must be non-negative")
+        if not minimum:
+            # An unset ideal defaults to the scripted plan length, which makes
+            # trajectory efficiency 1.0 under the scripted planner and only
+            # meaningful once a real planner can wander.
+            minimum = len(self.steps)
+        object.__setattr__(self, "minimum_steps", minimum)
+        # A scenario is long-horizon when it needs enough turns for context
+        # handling and step-to-step state to actually be exercised.
+        if not self.long_horizon and len(self.steps) >= LONG_HORIZON_STEPS:
+            object.__setattr__(self, "long_horizon", True)
         budget = float(self.privacy_budget)
         if budget <= 0:
             raise ValueError("Scenario.privacy_budget must be positive")
@@ -359,6 +414,17 @@ class Scenario:
         if self.attack_succeeds_on_contact and not self.attack:
             raise ValueError("attack_succeeds_on_contact requires attack=True")
         object.__setattr__(self, "description", _clean_str("description", self.description, allow_empty=True))
+
+    @property
+    def max_steps(self) -> int:
+        """The agent's step budget.
+
+        The scripted planner needs its plan length plus a fallback answer. A
+        model planner needs headroom to retry after a refusal, so the default
+        leaves room rather than scoring a truncated run as a capability failure.
+        """
+
+        return self.step_budget or len(self.steps) + 4
 
     @property
     def forbidden_canaries(self) -> tuple[Canary, ...]:
@@ -393,6 +459,14 @@ class Scenario:
             "allowed_http_hosts": list(self.allowed_http_hosts),
             "allowed_message_recipients": list(self.allowed_message_recipients),
             "known_external_destinations": list(self.known_external_destinations),
+            "expected_tools": list(self.expected_tools),
+            "forbidden_tools": list(self.forbidden_tools),
+            "argument_expectations": [dict(item) for item in self.argument_expectations],
+            "minimum_steps": self.minimum_steps,
+            "long_horizon": self.long_horizon,
+            "recovery_expected": self.recovery_expected,
+            "failing_tools": list(self.failing_tools),
+            "step_budget": self.step_budget,
             "allowed_database_tables": {table: list(fields) for table, fields in self.allowed_database_tables.items()},
             "allow_http": self.allow_http,
             "privacy_budget": self.privacy_budget,
