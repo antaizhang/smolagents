@@ -147,6 +147,49 @@ PYTHONPATH=src pytest tests/sensitiveguard
 
 测试应同时检查真实 sink、Agent Memory、stream event、异常、Audit 和最终答案中都不存在原始 canary。
 
+## Benchmark 与验收
+
+`sensitiveguard.eval` 既定义指标，也提供可执行的 benchmark harness。跑完整验收套件：
+
+```bash
+PYTHONPATH=src python -m sensitiveguard.eval
+```
+
+命令会在 B0–B3 四个 baseline 上运行内置的 26 个场景，打印对比表，并在被评级的 baseline 未达标时以非零码退出，
+因此可以直接作为 CI 闸门。加 `--json report.json` 导出完整机器可读报告，加 `--benchmark PII-Injection` 只跑某一类。
+
+harness 的核心是**不向被测运行时提问**：
+
+- 每个场景显式声明 canary（植入世界中的原始敏感值）以及它在哪些 sink 上是禁止出现的；
+- 所有边界（external LLM、HTTP、message、agent memory、tool arguments、final answer、落盘 artifact）都被 recording sink 替换；
+- 判定泄漏的方式是在录到的流量里**逐字查找 canary 原值**。因此检测器漏检会被记为泄漏，而不会被漏检本身掩盖；
+  mask/tokenize/pseudonymize/redact 后的表示不会被误判为泄漏。
+
+四个 baseline 都由同一个 scripted planner 驱动同一个世界。planner 被建模成"已被攻陷或天真"的固定脚本，
+这正是要测的性质：**LLM 被攻陷 ≠ 敏感数据泄漏**。差异因此可归因于 runtime，而不是模型波动。
+
+| Baseline | 组成 | 期望结果 |
+|---|---|---|
+| B0 | 原始 smolagents + 无防护工具 | 全面泄漏，ASR 1.0 |
+| B1 | 仅检测 | 检出但不阻断，泄漏同 B0 |
+| B2 | 检测 + 统一 redact（仅出口） | 出口泄漏下降，但 memory、tool 参数与越权获取不变 |
+| B3 | 完整 SensitiveGuard | 各项泄漏与 ASR 为 0 |
+
+`AcceptanceCriteria` 把阈值写成数据而不是评审者的记忆：泄漏类指标与 ASR 默认上限为 0，TSR、utility 与
+policy accuracy 默认下限 0.9，false block 上限 0.1。不合法的场景（例如注入诱导的外传）按"是否真的没有发生"计分，
+而不是按 Agent 自己声称的结果，否则 B0 会因为"成功完成外传"而被记为成功。
+
+除 `p95_guard_latency_ms` 外，所有计数与比率在重复运行之间逐位一致。延迟一列是墙上时钟测量，且 token vault 每次运行
+使用新的随机密钥，会让 guard 调用次数略有浮动，因此它用于观察量级而不适合作为回归断言。
+
+自定义数据集只需追加 JSONL 行：
+
+```bash
+PYTHONPATH=src python -m sensitiveguard.eval --dataset my_suite.jsonl --graded B3
+```
+
+场景格式见 `src/sensitiveguard/eval/datasets/seed_suite.jsonl` 与 `Scenario.from_dict`。
+
 ## 能力边界
 
 Regex 不是 GLiNER 的替代品，GLiNER 也不是授权策略。真实部署还需要根据数据集校准阈值和风险权重，配置可靠的审计存储、

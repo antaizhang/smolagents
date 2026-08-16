@@ -139,6 +139,7 @@ lines-after-imports = 2
 [tool.setuptools.package-data]
 "smolagents.prompts" = ["*.yaml"]
 "sensitiveguard.policy" = ["*.yaml"]
+"sensitiveguard.eval.datasets" = ["*.jsonl"]
 
 [project.scripts]
 smolagent = "smolagents.cli:main"
