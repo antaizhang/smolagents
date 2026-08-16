@@ -13,6 +13,8 @@ from collections.abc import Iterable, Mapping
 from dataclasses import replace
 from typing import Any
 
+from sensitiveguard.crypto import constant_time_equals
+
 from .models import (
     Effect,
     IntentOperation,
@@ -244,7 +246,7 @@ class RuleBasedIntentResolver:
         if not isinstance(parent, IntentSpec):
             raise TypeError("parent must be an IntentSpec")
         now = float(self._clock())
-        if not hmac.compare_digest(parent.intent_id, _signed_intent_id(parent, self._key)):
+        if not constant_time_equals(parent.intent_id, _signed_intent_id(parent, self._key)):
             raise ValueError("The parent intent signature is invalid")
         if now < parent.issued_at or now >= parent.expires_at:
             raise ValueError("The parent intent is not active")

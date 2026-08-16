@@ -11,6 +11,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from sensitiveguard.models import DetectionResult, Severity
+from sensitiveguard.runtime.capability_manifest import FILESYSTEM_CAPABILITY_PREFIXES
 
 from .models import EndpointDescriptor, RouteDecision, RouteKind, RouteStatus
 
@@ -153,7 +154,11 @@ class PrivacyRouter:
             destination, kind = "local_process", RouteKind.PROCESS
         elif name == "final_answer":
             destination, kind = "requester", RouteKind.REQUESTER
-        elif any(marker in name for marker in ("file", "directory")):
+        elif name.startswith(FILESYSTEM_CAPABILITY_PREFIXES):
+            # Matching on the capability-name prefixes the host manifest uses,
+            # never on a substring: an unrelated tool such as ``customer_profile``
+            # merely contains "file" and must keep its internal route instead of
+            # failing review with a route/manifest mismatch.
             destination, kind = "internal_file", RouteKind.FILESYSTEM
         else:
             # Unknown/custom tools are host-registered internal capabilities.

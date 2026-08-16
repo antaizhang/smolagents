@@ -13,6 +13,19 @@ def _canonical(value: Any) -> bytes:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str).encode()
 
 
+# Capability-name prefixes whose effective route is the internal filesystem.
+# The privacy router must classify exactly the same names, otherwise every
+# affected call fails review with a route/manifest mismatch, so both layers read
+# this tuple instead of duplicating a heuristic.
+FILESYSTEM_CAPABILITY_PREFIXES: tuple[str, ...] = (
+    "remediate_",
+    "safe_read_",
+    "sanitize_file",
+    "scan_",
+    "verify_",
+)
+
+
 @dataclass(frozen=True, slots=True)
 class CapabilityManifest:
     name: str
@@ -174,4 +187,4 @@ class CapabilityManifestRegistry:
             return tuple(sorted(self._manifests))
 
 
-__all__ = ["CapabilityManifest", "CapabilityManifestRegistry"]
+__all__ = ["FILESYSTEM_CAPABILITY_PREFIXES", "CapabilityManifest", "CapabilityManifestRegistry"]

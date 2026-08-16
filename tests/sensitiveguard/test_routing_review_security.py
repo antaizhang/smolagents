@@ -499,6 +499,86 @@ def test_custom_internal_capability_honors_explicit_host_scope(scope: dict[str, 
     assert not lineage.prepared
 
 
+@pytest.mark.parametrize("name", ("customer_profile", "profile_lookup", "list_files", "directory_report"))
+def test_capability_name_containing_file_keeps_its_internal_route(name: str) -> None:
+    """The router and the manifest must classify a capability name identically.
+
+    A substring match would route ``customer_profile`` to the filesystem while
+    its manifest still declares the internal route, so every call would fail
+    review with a route/manifest mismatch instead of running.
+    """
+
+    authorization = _Authorization()
+    context = PrivacyContext(
+        task="Use one internal host capability",
+        purpose="offline capability naming test",
+        destination="internal",
+        run_id=f"naming-{name}",
+    )
+    tool = _CustomInternalTool(authorization, context)
+    tool.name = name
+    manifest = CapabilityManifest.from_tool(tool)
+    lineage = _Lineage()
+    engine = SecurityReviewEngine(
+        router=PrivacyRouter(key=ROUTING_KEY),
+        intent_guard=IntentGuard(clock=lambda: 100.0),
+        manifests=CapabilityManifestRegistry(),
+        permits=ExecutionPermitStore(key=PERMIT_KEY, clock=lambda: 100.0),
+        lineage_tracker=lineage,
+        audit_logger=_Audit(),
+        gateway=tool.gateway,
+        context=context,
+    )
+    engine.register_tools([tool])
+
+    route = engine.router.route_tool(tool, {"value": "safe"}, context, operation=manifest.operation)
+    review = engine.preflight(tool, {"value": "safe"}, context, _intent(context))
+
+    assert route.destination == "internal"
+    assert not route.external
+    assert review.allowed, review.code
+
+
+@pytest.mark.parametrize(
+    "name",
+    ("scan_file", "scan_directory", "safe_read_file", "sanitize_file", "remediate_sensitive_file"),
+)
+def test_host_filesystem_capabilities_still_route_to_the_internal_filesystem(name: str) -> None:
+    tool = SimpleNamespace(name=name, inputs={}, output_type="object")
+    context = PrivacyContext(
+        task="Read one authorized file",
+        purpose="offline capability naming test",
+        destination="internal_file",
+        run_id=f"naming-{name}",
+    )
+
+    route = PrivacyRouter(key=ROUTING_KEY).route_tool(
+        tool,
+        {"path": "/data/report.txt"},
+        context,
+        operation=CapabilityManifest.from_tool(tool).operation,
+    )
+
+    assert route.allowed
+    assert route.route_kind is RouteKind.FILESYSTEM
+    assert route.destination == "internal_file"
+    assert route.destination in CapabilityManifest.from_tool(tool).destinations
+
+
+def test_execution_permit_decides_instead_of_raising_on_non_ascii_bindings() -> None:
+    """Run identifiers and policy versions are ordinary text, not ASCII digests."""
+
+    store = ExecutionPermitStore(key=PERMIT_KEY, clock=lambda: 100.0)
+    values = _permit_values(run_id="运行-1", capability="safe_send_message", policy_version="策略-v1")
+    permit = store.issue(**values)
+
+    assert store.consume(permit.permit_id, **values) is True
+    assert store.consume(permit.permit_id, **values) is False
+
+    replayed = store.issue(**values)
+    assert store.consume(replayed.permit_id, **{**values, "run_id": "运行-2"}) is False
+
+
 def test_security_review_fails_closed_if_registered_manifest_changes_after_preflight() -> None:
     engine, tool, lineage = _review_engine()
     context = engine.context

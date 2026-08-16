@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-import hmac
 import math
 import time
 from collections.abc import Mapping
 from threading import RLock
 from typing import Any
+
+from sensitiveguard.crypto import constant_time_equals
 
 from .models import (
     ActionRequest,
@@ -219,7 +220,7 @@ class IntentGuard:
     def _validate_envelope(self, intent: IntentSpec, now: float) -> str | None:
         if self._key is not None:
             expected = _signed_intent_id(intent, self._key)
-            if not hmac.compare_digest(intent.intent_id, expected):
+            if not constant_time_equals(intent.intent_id, expected):
                 return "INVALID_INTENT_SIGNATURE"
         if now < intent.issued_at:
             return "INTENT_NOT_YET_VALID"
