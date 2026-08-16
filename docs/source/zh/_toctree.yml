@@ -16,6 +16,8 @@
     title: 🛡️ 使用 E2B 保护你的代码执行
   - local: tutorials/memory
     title: 📚 管理 Agent 的记忆
+  - local: tutorials/sensitiveguard
+    title: 🔐 构建敏感数据安全 Agent
 - title: Conceptual guides
   sections:
   - local: conceptual_guides/intro_agents

@@ -1,0 +1,61 @@
+{
+  "version": "builtin-v1",
+  "rules": [
+    {
+      "policy_id": "SG-INJECTION-001",
+      "action": "BLOCK",
+      "labels": ["PROMPT_INJECTION"],
+      "reason": "Prompt-injection instructions cannot authorize runtime actions",
+      "priority": 10000
+    },
+    {
+      "policy_id": "SG-LLM-SECRET-001",
+      "action": "BLOCK",
+      "labels": ["PASSWD", "API_KEY", "ACCESS_TOKEN", "JWT", "PRIVATE_KEY", "CLOUD_SECRET", "DATABASE_PASSWORD"],
+      "stages": ["tool_input"],
+      "destinations": ["external_llm"],
+      "reason": "Credentials and secrets cannot be disclosed to an external LLM",
+      "priority": 900
+    },
+    {
+      "policy_id": "SG-LLM-NAME-001",
+      "action": "PSEUDONYMIZE",
+      "labels": ["NAME"],
+      "stages": ["tool_input"],
+      "destinations": ["external_llm"],
+      "necessary": false,
+      "reason": "A name is unnecessary for this external LLM task",
+      "priority": 800
+    },
+    {
+      "policy_id": "SG-LLM-ADDRESS-001",
+      "action": "GENERALIZE",
+      "labels": ["ADDRESS"],
+      "stages": ["tool_input"],
+      "destinations": ["external_llm"],
+      "necessary": false,
+      "reason": "Only a generalized location may be used by the external LLM",
+      "priority": 800
+    },
+    {
+      "policy_id": "SG-LLM-FINANCIAL-001",
+      "action": "TOKENIZE",
+      "labels": ["BANKACCOUNT", "FINACCOUNT"],
+      "stages": ["tool_input"],
+      "destinations": ["external_llm"],
+      "necessary": false,
+      "reason": "A one-way secure token replaces an unnecessary financial identifier",
+      "priority": 800
+    },
+    {
+      "policy_id": "SG-LLM-PII-001",
+      "action": "REDACT",
+      "labels": ["PASSPORTID", "IDCARD", "DRIVERID", "INSURANCEID", "HEALTHCARD", "RESIDENCEID", "MILITARYID", "TAXID", "VISAAUTH", "SOCIALID", "MOBILE", "EMAIL", "FAX", "TEL", "OUTPATIENTID", "PATIENTID"],
+      "stages": ["tool_input"],
+      "destinations": ["external_llm"],
+      "necessary": false,
+      "reason": "The identifier is unnecessary for the external LLM task",
+      "priority": 700
+    }
+  ]
+}
