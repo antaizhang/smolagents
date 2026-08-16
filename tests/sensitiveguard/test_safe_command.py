@@ -174,6 +174,29 @@ def test_capability_is_exact_and_network_is_never_enabled(tmp_path: Path) -> Non
         )
 
 
+def test_non_ascii_grammar_authorizes_the_matching_token_and_rejects_the_rest(tmp_path: Path) -> None:
+    """A host capability grammar is ordinary text, not an ASCII digest."""
+
+    executable = _make_executable(tmp_path)
+    capability = CommandCapability(
+        name="report_mode",
+        executable=executable,
+        argument_rules=(
+            CommandArgumentRule.fixed("flag", "--模式"),
+            CommandArgumentRule.one_of("mode", ("快速", "完整")),
+        ),
+    )
+    authorizer = CommandAuthorizer((capability,), AuthorizationPolicy(allowed_roots=(tmp_path,)))
+
+    authorized = authorizer.authorize(CommandParser().parse("report_mode", ["--模式", "完整"]))
+
+    assert authorized.argv == ("--模式", "完整")
+    with pytest.raises(CommandAuthorizationError):
+        authorizer.authorize(CommandParser().parse("report_mode", ["--模式", "详细"]))
+    with pytest.raises(CommandAuthorizationError):
+        authorizer.authorize(CommandParser().parse("report_mode", ["--格式", "完整"]))
+
+
 def test_file_and_cwd_authorization_reject_escape_symlink_and_overwrite(
     tmp_path: Path,
 ) -> None:

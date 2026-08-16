@@ -240,6 +240,119 @@ def test_prompt_injection_taint_propagates_through_sanitized_descendants() -> No
     assert INJECTION not in _serialized(tracker.report(context))
 
 
+@pytest.mark.parametrize(
+    ("produced", "consumed"),
+    (
+        ({"status": "one"}, {"status": "two"}),  # only the schema key is shared
+        ({"count": 0}, {"exit_code": 0}),
+        ({"ok": True}, {"complete": True}),
+        ({"note": None}, {"error": None}),
+        ({"note": ""}, {"error": ""}),
+    ),
+)
+def test_schema_keys_and_non_identifying_scalars_do_not_create_parent_edges(
+    produced: dict[str, object],
+    consumed: dict[str, object],
+) -> None:
+    """Lineage must answer where a value came from, not where a key name recurs.
+
+    A dictionary key, ``None``, a boolean or a small counter appears in
+    unrelated payloads by coincidence. Treating one as evidence of derivation
+    invents parent edges and reports provenance the data never had.
+    """
+
+    tracker = LineageTracker(b"n" * 32)
+    context = _context("no-coincidental-parents")
+    first = tracker.record_guard(
+        "source payload",
+        produced,
+        context,
+        GuardStage.TOOL_OUTPUT,
+        "producer",
+        "agent_memory",
+        DetectionResult(),
+        None,
+        GuardStatus.ALLOWED,
+    )
+    second = tracker.record_guard(
+        consumed,
+        "done",
+        context,
+        GuardStage.TOOL_INPUT,
+        "consumer",
+        "internal",
+        DetectionResult(),
+        None,
+        GuardStatus.ALLOWED,
+    )
+
+    assert first.output_artifact is not None
+    assert second.input_artifact.parent_ids == ()
+    assert tracker.verify_chain(context)
+
+
+def test_unrelated_artifact_does_not_inherit_injection_taint_through_a_shared_key() -> None:
+    tracker = LineageTracker(b"o" * 32)
+    context = _context("no-coincidental-taint")
+    poisoned = tracker.record_guard(
+        {"path": "/data/inbox.txt"},
+        {"status": "ALLOWED", "content": INJECTION},
+        context,
+        GuardStage.TOOL_OUTPUT,
+        "safe_read_file",
+        "agent_memory",
+        _detection("PROMPT_INJECTION", INJECTION),
+        None,
+        GuardStatus.ALLOWED,
+    )
+    unrelated = tracker.record_guard(
+        {"status": "ALLOWED", "recipient": "approved@example.test"},
+        "sent",
+        context,
+        GuardStage.TOOL_INPUT,
+        "safe_send_message",
+        "message:example.test",
+        DetectionResult(),
+        None,
+        GuardStatus.ALLOWED,
+    )
+
+    assert poisoned.output_artifact is not None
+    assert poisoned.output_artifact.prompt_injection_tainted
+    assert not unrelated.input_artifact.prompt_injection_tainted
+    assert unrelated.input_artifact.artifact_id not in tracker.report(context).tainted_artifact_ids
+
+
+def test_identifying_value_reused_from_a_prior_output_still_links() -> None:
+    tracker = LineageTracker(b"p" * 32)
+    context = _context("identifying-leaf-parent")
+    first = tracker.record_guard(
+        "source payload",
+        {"assigned_case": "case-9f2ad41c-0007"},
+        context,
+        GuardStage.TOOL_OUTPUT,
+        "producer",
+        "agent_memory",
+        DetectionResult(),
+        None,
+        GuardStatus.ALLOWED,
+    )
+    second = tracker.record_guard(
+        {"lookup": "case-9f2ad41c-0007"},
+        "done",
+        context,
+        GuardStage.TOOL_INPUT,
+        "consumer",
+        "internal",
+        DetectionResult(),
+        None,
+        GuardStatus.ALLOWED,
+    )
+
+    assert first.output_artifact is not None
+    assert first.output_artifact.artifact_id in second.input_artifact.parent_ids
+
+
 def test_fingerprints_parent_indexes_and_queries_are_isolated_per_run() -> None:
     tracker = LineageTracker(b"f" * 32)
     first_context = _context("isolated-run-a")

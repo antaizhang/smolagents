@@ -33,6 +33,14 @@ from .models import (
 
 _GENESIS_HASH = "0" * 64
 _SAFE_LABEL = re.compile(r"^[A-Z][A-Z0-9_]{0,63}$")
+# A leaf fingerprint claims that a scalar produced by an earlier guarded output
+# reappeared in a later payload, which is only evidence of derivation when the
+# scalar identifies something.  Structural constants (``None``, booleans),
+# schema words and short enum-like values recur by coincidence across unrelated
+# artifacts, so linking on them would fabricate parent edges and spread taint
+# along paths the data never took.  A leaf is therefore linkable only when its
+# canonical text carries at least this many characters.
+_MIN_LINKABLE_LEAF_CHARS = 8
 _KNOWN_STAGES = frozenset(
     {
         "data_acquisition",
@@ -805,7 +813,9 @@ class LineageTracker:
 
     def _payload_fingerprints(self, payload: Any, run_ref: str) -> _PayloadFingerprints:
         artifact = self._payload_hmac("artifact", run_ref, payload)
-        leaf_fingerprints = {self._payload_hmac("leaf", run_ref, leaf) for leaf in self._iter_leaves(payload)}
+        leaf_fingerprints = {
+            self._payload_hmac("leaf", run_ref, leaf) for leaf in self._iter_leaves(payload) if self._is_linkable(leaf)
+        }
         subtree_fingerprints = {
             self._payload_hmac("artifact", run_ref, subtree) for subtree in self._iter_subtrees(payload)
         }
@@ -921,7 +931,9 @@ class LineageTracker:
             for key in sorted(value):
                 if not isinstance(key, str):
                     raise TypeError("Lineage payload mappings must use string keys")
-                yield key
+                # A mapping key names the payload's schema rather than the data
+                # it carries.  The exact structure is already covered by the
+                # artifact and subtree fingerprints, so keys are not leaves.
                 yield from cls._iter_leaves(value[key])
             return
         if isinstance(value, (list, tuple)):
@@ -929,6 +941,20 @@ class LineageTracker:
                 yield from cls._iter_leaves(child)
             return
         yield value
+
+    @classmethod
+    def _is_linkable(cls, leaf: Any) -> bool:
+        """Report whether a scalar leaf identifies the value it came from."""
+
+        if leaf is None or isinstance(leaf, bool):
+            return False
+        if isinstance(leaf, Enum):
+            return cls._is_linkable(leaf.value)
+        if isinstance(leaf, bytes):
+            return len(leaf) >= _MIN_LINKABLE_LEAF_CHARS
+        if isinstance(leaf, (str, int, float)):
+            return len(str(leaf)) >= _MIN_LINKABLE_LEAF_CHARS
+        return False
 
     @classmethod
     def _iter_subtrees(cls, value: Any) -> Iterable[Any]:

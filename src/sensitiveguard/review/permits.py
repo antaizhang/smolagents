@@ -12,6 +12,8 @@ from dataclasses import dataclass, replace
 from threading import RLock
 from typing import Any
 
+from sensitiveguard.crypto import constant_time_equals
+
 
 def _canonical(value: Any) -> bytes:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
@@ -166,7 +168,7 @@ class ExecutionPermitStore:
                 permit.policy_version,
             )
             if len(expected) != len(actual) or any(
-                not hmac.compare_digest(str(left), str(right)) for left, right in zip(expected, actual, strict=True)
+                not constant_time_equals(str(left), str(right)) for left, right in zip(expected, actual, strict=True)
             ):
                 return False
             self._permits[permit_id] = replace(permit, status="CONSUMED")

@@ -24,6 +24,8 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Protocol, runtime_checkable
 
+from sensitiveguard.crypto import constant_time_equals
+
 from .authorization import AuthorizationPolicy
 from .error_model import AuthorizationError, SensitiveGuardError, ToolExecutionError
 
@@ -433,11 +435,11 @@ class CommandAuthorizer:
         authorized_paths: list[AuthorizedPath] = []
         for index, (token, rule) in enumerate(zip(request.argv, capability.argument_rules)):
             if rule.kind == "literal":
-                if not hmac.compare_digest(token, rule.literal or ""):
+                if not constant_time_equals(token, rule.literal or ""):
                     raise CommandAuthorizationError()
                 normalized.append(token)
             elif rule.kind == "enum":
-                if not any(hmac.compare_digest(token, choice) for choice in rule.choices):
+                if not any(constant_time_equals(token, choice) for choice in rule.choices):
                     raise CommandAuthorizationError()
                 normalized.append(token)
             elif rule.kind == "text":
