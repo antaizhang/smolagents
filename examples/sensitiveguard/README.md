@@ -10,6 +10,15 @@ examples/sensitiveguard/demo_server/start.sh                       # 建环境 +
 python examples/sensitiveguard/demo_server/run_cases.py            # 只跑用例，可当 CI 卡口
 ```
 
+## 只想搞懂『敏感数据识别』这一步是怎么做的？
+
+看 [`detection/`](detection/README.md) — 把检测流水线逐层拆开打印，配 26 个可读的单元测试：
+
+```bash
+python examples/sensitiveguard/detection/detection_walkthrough.py         # 逐层过程
+pytest examples/sensitiveguard/detection/test_detection_walkthrough.py -v # 可运行的断言
+```
+
 ## The three acceptance paths
 
 Run the fully offline demo from the repository root:
