@@ -1,0 +1,29 @@
+# 安装：
+#   sudo cp sensitiveguard-demo.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now sensitiveguard-demo
+# 按实际路径修改 WorkingDirectory / ExecStart / User，并把 SG_DEMO_TOKEN 换成随机值。
+[Unit]
+Description=SensitiveGuard demo (敏感数据识别 / 外发命令检测)
+After=network.target
+
+[Service]
+Type=simple
+User=sensitiveguard
+WorkingDirectory=/opt/smolagents
+Environment=SG_DEMO_TOKEN=change-me-to-a-random-hex-string
+ExecStart=/opt/smolagents/.venv/bin/python examples/sensitiveguard/demo_server/server.py --host 127.0.0.1 --port 8080
+Restart=on-failure
+RestartSec=3
+
+# The demo runs no subprocess and opens no outbound socket, so it can be locked down hard.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/tmp
+PrivateDevices=yes
+RestrictAddressFamilies=AF_INET AF_INET6
+MemoryMax=512M
+
+[Install]
+WantedBy=multi-user.target

@@ -1,5 +1,17 @@
 # SensitiveGuard examples and secure host wiring
 
+## 想直接在服务器上跑一套可测的 demo？
+
+看 [`demo_server/`](demo_server/README.md) — 一个零第三方依赖的 HTTP 演示服务，覆盖敏感数据识别、
+外发命令检测、外发通道拦截和结构化命令白名单，自带 38 个用例和网页控制台：
+
+```bash
+examples/sensitiveguard/demo_server/start.sh                       # 建环境 + 跑用例 + 起服务
+python examples/sensitiveguard/demo_server/run_cases.py            # 只跑用例，可当 CI 卡口
+```
+
+## The three acceptance paths
+
 Run the fully offline demo from the repository root:
 
 ```bash

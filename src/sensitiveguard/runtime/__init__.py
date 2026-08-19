@@ -19,6 +19,22 @@ from .command import (
     ExecutableIdentity,
     fingerprint_command,
 )
+from .egress_inspector import (
+    CATEGORY_DESTRUCTIVE,
+    CATEGORY_EGRESS,
+    CATEGORY_OBFUSCATION,
+    CATEGORY_PERSISTENCE,
+    CATEGORY_PRIVILEGE,
+    CATEGORY_SENSITIVE_SOURCE,
+    CATEGORY_SHELL_CONTROL,
+    CATEGORY_STAGING,
+    VERDICT_ALLOW,
+    VERDICT_BLOCK,
+    VERDICT_REVIEW,
+    EgressCommandInspector,
+    EgressFinding,
+    EgressInspection,
+)
 from .error_model import (
     ApprovalRequiredError,
     AuthorizationError,
@@ -43,6 +59,20 @@ from .tool_registry import RegisteredCapability, ToolRegistry
 
 
 __all__ = [
+    "CATEGORY_DESTRUCTIVE",
+    "CATEGORY_EGRESS",
+    "CATEGORY_OBFUSCATION",
+    "CATEGORY_PERSISTENCE",
+    "CATEGORY_PRIVILEGE",
+    "CATEGORY_SENSITIVE_SOURCE",
+    "CATEGORY_SHELL_CONTROL",
+    "CATEGORY_STAGING",
+    "EgressCommandInspector",
+    "EgressFinding",
+    "EgressInspection",
+    "VERDICT_ALLOW",
+    "VERDICT_BLOCK",
+    "VERDICT_REVIEW",
     "AcquisitionPlan",
     "ApprovalRequiredError",
     "ApprovalRequest",
