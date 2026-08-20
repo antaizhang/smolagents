@@ -1,33 +1,13 @@
-"""End-to-end SensitiveGuard run: prompt + input file -> plan/act/observation.
+"""End-to-end SensitiveGuard run with dynamic intent and guarded planning.
 
-Unlike ``offline_demo.py`` (which calls tools directly, no LLM) and
-``run_ollama_agent.py`` (which feeds sensitive text inline in the prompt),
-this example wires the *whole* agent loop together:
-
-    prompt + an input file on disk
-        -> the LLM plans (per-step reasoning)
-        -> it acts   (guarded SensitiveGuard tools: scan_file / safe_read_file / mask ...)
-        -> it observes (guarded tool observations)
-        -> repeat until a guarded final answer
-
-Every model I/O and every tool call passes through the SensitiveGuard gateway
-(detection, policy, minimization, one-use permits, raw-free lineage). After the
-run we replay the full trajectory from the agent's memory so you can see the
-plan -> act -> observation chain, and print the raw-free lineage report.
-
-Prerequisites
--------------
-    pip install -e ".[litellm]"
-    ollama list                              # confirm the model tag
-    curl http://127.0.0.1:11436/api/tags     # confirm Ollama is up on 11436
-
-Configuration (optional; defaults to port 11436 / qwen3.5:9b):
-    SG_OLLAMA_MODEL, SG_OLLAMA_API_BASE, SG_OLLAMA_NUM_CTX, SG_OLLAMA_API_KEY
-
-Run
----
-    python examples/sensitiveguard/run_ollama_file_agent.py
-    python examples/sensitiveguard/run_ollama_file_agent.py /path/to/your/file.txt
+Flow:
+    prompt + input file
+        -> trusted host PrivacyContext
+        -> prompt-derived request intent (host ceiling ∩ current request)
+        -> guarded PlanningStep
+        -> guarded tool action
+        -> guarded observation
+        -> repeat until guarded final answer
 """
 
 from __future__ import annotations
@@ -40,6 +20,7 @@ from typing import Any
 from smolagents.memory import ActionStep, FinalAnswerStep, PlanningStep
 
 from sensitiveguard import SensitiveGuardRuntime, build_ollama_model
+from sensitiveguard.dynamic_agent import create_dynamic_agent
 from sensitiveguard.privacy import PrivacyContext
 
 SAMPLE_NOTE = (
@@ -55,7 +36,6 @@ SAMPLE_NOTE = (
 
 
 def _prepare_input_file(root: Path, override: str | None) -> Path:
-    """Return the file the agent will be asked to process."""
     if override:
         path = Path(override).resolve()
         if not path.is_file():
@@ -66,16 +46,26 @@ def _prepare_input_file(root: Path, override: str | None) -> Path:
     return path
 
 
+def _print_intent(agent: Any) -> None:
+    print("\n" + "=" * 78)
+    print("动态意图 (host ceiling -> request intent)")
+    print("=" * 78)
+    if agent.host_intent is not None:
+        print("HOST operations:", [item.value for item in agent.host_intent.allowed_operations])
+        print("HOST capabilities:", list(agent.host_intent.allowed_capabilities))
+    if agent.active_intent is not None:
+        print("REQUEST operations:", [item.value for item in agent.active_intent.allowed_operations])
+        print("REQUEST capabilities:", list(agent.active_intent.allowed_capabilities))
+        print("parent_intent_id:", agent.active_intent.parent_intent_id)
+
+
 def _print_trajectory(agent: Any) -> None:
-    """Replay the plan -> act -> observation chain from agent memory."""
     print("\n" + "=" * 78)
     print("完整轨迹 (plan -> act -> observation)")
     print("=" * 78)
     step_no = 0
     for step in agent.memory.steps:
         if isinstance(step, PlanningStep):
-            # SensitiveGuard disables periodic planning, so this usually won't
-            # appear; handled here for completeness.
             print(f"\n[计划 PLAN]\n{step.plan.strip()}")
             continue
         if isinstance(step, ActionStep):
@@ -99,26 +89,21 @@ def main() -> None:
         root = Path(tmp)
         input_file = _prepare_input_file(root, override)
 
-        # The privacy contract: the agent may read + sanitize files under `root`
-        # and mask sensitive data, but nothing is authorized to leave the host.
+        # Trusted host ceiling. User wording may only narrow these permissions.
         context = PrivacyContext(
-            task="Read one authorized local file, find sensitive data, and return a masked summary.",
+            task="Read, scan, analyze, sanitize and summarize one authorized local file.",
             purpose="ticket_note_privacy_triage",
             requester="support_agent",
             trust_level="internal",
             allowed_scope=("ticket_note", "customers"),
-            allowed_operations=("QUERY", "ANALYZE", "SUMMARIZE", "READ", "MASK", "REDACT", "SANITIZE"),
+            allowed_operations=("READ", "SCAN", "DETECT", "ANALYZE", "SUMMARIZE", "TRANSFORM"),
+            allowed_destinations=("internal_file", "internal", "agent_memory", "requester"),
         )
 
-        # allowed_roots is what turns on the file tools (scan_file / safe_read_file
-        # / sanitize_file / verify_sanitized_file ...).
         runtime = SensitiveGuardRuntime.create(context, allowed_roots=(root,))
         model = build_ollama_model()
-        agent = runtime.create_agent(model, max_steps=6, verbosity_level=2)
+        agent = create_dynamic_agent(runtime, model, max_steps=6, planning_interval=2, verbosity_level=2)
 
-        # The prompt: it names the input file; the agent must plan how to inspect
-        # it, act via the guarded tools, observe, and answer. The file content is
-        # never trusted to grant authority — the PrivacyContext above is.
         task = (
             f"There is a customer ticket note saved at the local path: {input_file}\n"
             "1) Scan that file for sensitive data.\n"
@@ -132,9 +117,9 @@ def main() -> None:
         print(f"Prompt:\n{task}\n")
         result = agent.run(task)
 
+        _print_intent(agent)
         _print_trajectory(agent)
 
-        # Raw-free lineage: proves the whole chain was tracked without storing payloads.
         report = runtime.lineage_tracker.report(context)
         print("\n" + "=" * 78)
         print("血缘报告 (raw-free)")
