@@ -27,6 +27,7 @@ from .eval import (
     PRFScore,
 )
 from .factory import SensitiveGuardRuntime, create_sensitive_agent
+from .llm import build_ollama_model
 from .intent import (
     ActionRequest,
     Effect,
@@ -121,6 +122,7 @@ __all__ = [
     "BaselineConfig",
     "BaselineName",
     "BenchmarkName",
+    "build_ollama_model",
     "CompositeDetector",
     "CapabilityManifest",
     "CapabilityManifestRegistry",
