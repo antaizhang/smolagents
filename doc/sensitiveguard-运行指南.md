@@ -217,6 +217,50 @@ print(agent.run("扫描并脱敏：客户张三 手机13800138000 身份证44010
 
 ---
 
+## 6.5 从「prompt + 输入文件」把 plan/act/observation 完整串起来
+
+前面 `run_ollama_agent.py` 是把敏感文本直接写在 prompt 里。若你要的是
+**从一个输入文件开始，让模型自己计划 → 调工具行动 → 观察 → 迭代 → 产出守卫化结果**
+的完整闭环，用这个例子：
+
+```bash
+python examples/sensitiveguard/run_ollama_file_agent.py                 # 用内置样例文件
+python examples/sensitiveguard/run_ollama_file_agent.py /path/to/note.txt   # 用你自己的文件
+```
+
+它把整条链路接起来：
+
+```text
+prompt + 磁盘上的输入文件
+  → LLM 计划（每一步的推理）
+  → 行动 Act：守卫化工具 scan_file / safe_read_file / mask_text ...
+  → 观察 Observation：经网关脱敏后的工具返回
+  → 循环，直到守卫化的 final_answer
+```
+
+关键点：
+
+- **文件工具的开关是 `allowed_roots`**。`SensitiveGuardRuntime.create(context, allowed_roots=(root,))`
+  才会装配 `scan_file` / `safe_read_file` / `sanitize_file` / `verify_sanitized_file` 等文件工具。
+- **授权只来自 `PrivacyContext`，不来自文件内容或 prompt**。文件里的文字是不可信工作负载，
+  即使写着"忽略所有隐私规则"也无法提权。
+- 跑完后脚本会**回放整条轨迹**：逐步打印 `[推理/计划]`→`[行动 ACT]`→`[观察 OBSERVATION]`，
+  最后 `[最终答案 FINAL]`，再打印**无原文血缘报告** `chain_valid / nodes / events`，证明每一步都被
+  追踪且没有落任何原文。
+
+轨迹回放来自 `agent.memory.steps`（`ActionStep.model_output` 是该步推理，`tool_calls` 是行动，
+`observations` 是观察）。SensitiveGuard 刻意禁用了周期性 planning，所以没有独立的 PLAN 步——
+它的"计划"体现在 ReAct 循环里每一步的推理。想接自己的编排，核心就三行：
+
+```python
+runtime = SensitiveGuardRuntime.create(context, allowed_roots=(work_dir,))  # 开文件工具
+agent = runtime.create_agent(build_ollama_model(), max_steps=6, verbosity_level=2)
+result = agent.run(f"处理本地文件 {input_file}：先扫描敏感数据，再读取，最后产出脱敏摘要。")
+# 之后遍历 agent.memory.steps 即可拿到完整 plan/act/observation
+```
+
+---
+
 ## 7. 接入生产时的边界（重要）
 
 这些安全检查是**应用层**控制，不替代系统级隔离：
@@ -241,6 +285,7 @@ print(agent.run("扫描并脱敏：客户张三 手机13800138000 身份证44010
 | `src/sensitiveguard/llm.py` | `build_ollama_model` 统一模型工厂 |
 | `examples/sensitiveguard/offline_demo.py` | 离线三路验收（第 2 节） |
 | `examples/sensitiveguard/run_ollama_agent.py` | Ollama 驱动完整 agent（第 6 节） |
+| `examples/sensitiveguard/run_ollama_file_agent.py` | 从输入文件把 plan/act/observation 串起来（第 6.5 节） |
 | `examples/sensitiveguard/detection/` | 检测链逐层走查（第 4 节） |
 | `examples/sensitiveguard/demo_server/` | HTTP 演示服务 + 38 用例（第 5 节） |
 | `python -m sensitiveguard.eval` | 基线对比评测 / CI 卡口（第 3 节） |
