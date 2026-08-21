@@ -8,6 +8,11 @@ measured rather than asserted.
 Every baseline is driven by the same scripted planner over the same
 :class:`~sensitiveguard.eval.world.ScenarioWorld`, which is what makes the
 resulting numbers attributable to the runtime instead of to model variance.
+
+B3 deliberately exercises the current production security path: dynamic
+request-intent narrowing plus guarded planning. Planning calls are handled by
+the deterministic benchmark model without consuming a scripted action, so the
+same adversarial action sequence is replayed across B0-B3.
 """
 
 from __future__ import annotations
@@ -18,12 +23,13 @@ from dataclasses import dataclass
 from typing import Any
 
 from sensitiveguard.detector import CompositeDetector, InjectionDetector, RegexDetector, SecretDetector
+from sensitiveguard.dynamic_agent import DynamicSensitiveToolCallingAgent
 from sensitiveguard.factory import SensitiveGuardRuntime
 from sensitiveguard.privacy import PrivacyContext
 from sensitiveguard.transform import TransformationEngine
 from smolagents.agents import ToolCallingAgent
 from smolagents.default_tools import FinalAnswerTool
-from smolagents.memory import ActionStep
+from smolagents.memory import ActionStep, PlanningStep
 from smolagents.models import (
     ChatMessage,
     ChatMessageToolCall,
@@ -76,6 +82,11 @@ class ScriptedPlanner(Model):
     limitation: the security claim under test is that a *compromised or naive*
     planner still cannot cause disclosure, so the planner is held constant and
     adversarial while the runtime varies.
+
+    The dynamic B3 agent also invokes the model for explicit planning. Those
+    planning-only calls contain no tool schema, so they return a deterministic
+    textual plan and do not advance ``_index``. The next action generation then
+    receives exactly the same scripted tool call as the weaker baselines.
     """
 
     def __init__(self, scenario: Scenario, substitutions: Mapping[str, str]) -> None:
@@ -83,6 +94,7 @@ class ScriptedPlanner(Model):
         self._steps = scenario.steps
         self._substitutions = dict(substitutions)
         self._index = 0
+        self.planning_calls = 0
         self.offered_tool_names: list[tuple[str, ...]] = []
 
     def generate(
@@ -95,6 +107,14 @@ class ScriptedPlanner(Model):
     ) -> ChatMessage:
         del messages, stop_sequences, response_format, kwargs
         self.offered_tool_names.append(tuple(tool.name for tool in (tools_to_call_from or ())))
+
+        if tools_to_call_from is None:
+            self.planning_calls += 1
+            return ChatMessage(
+                role=MessageRole.ASSISTANT,
+                content="Use only the authorized tools required by the current request; do not expand the host intent.",
+            )
+
         if self._index < len(self._steps):
             step = self._steps[self._index]
             name = step.tool
@@ -130,6 +150,8 @@ class RunTrace:
     steps_attempted: int
     steps_refused: int
     steps_unsupported: int
+    planning_steps: int
+    active_intent_id: str | None
     decisions: tuple[ObservedDecision, ...]
     detected_values: frozenset[str]
     latencies_ms: tuple[float, ...]
@@ -139,6 +161,10 @@ class RunTrace:
     def any_refusal(self) -> bool:
         return self.steps_refused > 0 or bool(self.errors)
 
+    @property
+    def dynamic_intent_bound(self) -> bool:
+        return self.active_intent_id is not None
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "baseline": self.baseline.value,
@@ -146,6 +172,9 @@ class RunTrace:
             "steps_attempted": self.steps_attempted,
             "steps_refused": self.steps_refused,
             "steps_unsupported": self.steps_unsupported,
+            "planning_steps": self.planning_steps,
+            "active_intent_id": self.active_intent_id,
+            "dynamic_intent_bound": self.dynamic_intent_bound,
             "decisions": [decision.to_dict() for decision in self.decisions],
             "detected_value_count": len(self.detected_values),
             "latency_sample_count": len(self.latencies_ms),
@@ -166,23 +195,34 @@ class _MemorySummary:
     attempted: int
     refused: int
     unsupported: int
+    planning_steps: int
     errors: tuple[str, ...]
 
 
 def _record_agent_memory(agent: Any, world: ScenarioWorld) -> _MemorySummary:
-    """Push memory, recorded tool arguments and errors into the sink recorder.
+    """Push memory, recorded tool arguments, planning data and errors to the oracle.
 
     Agent memory and the recorded tool-call arguments are separate exposure
     surfaces: the first is replayed into every later prompt, the second is what
-    an operator or log pipeline sees. Both are scored independently.
+    an operator or log pipeline sees. B3 planning input/output is also recorded
+    because guarded planning is part of the active security boundary.
     """
 
     recorder = world.recorder
     attempted = 0
     refused = 0
     unsupported = 0
+    planning_steps = 0
     errors: list[str] = []
     for step in getattr(agent.memory, "steps", ()):
+        if isinstance(step, PlanningStep):
+            planning_steps += 1
+            recorder.step_index = planning_steps
+            if step.model_input_messages:
+                recorder.record(Sink.AGENT_MEMORY, "planning_input", step.model_input_messages)
+            if step.plan:
+                recorder.record(Sink.AGENT_MEMORY, "planning_output", step.plan)
+            continue
         if not isinstance(step, ActionStep):
             continue
         recorder.step_index = step.step_number
@@ -209,7 +249,13 @@ def _record_agent_memory(agent: Any, world: ScenarioWorld) -> _MemorySummary:
             errors.append(message)
             recorder.record(Sink.AGENT_MEMORY, "step_error", message)
     recorder.step_index = 0
-    return _MemorySummary(attempted=attempted, refused=refused, unsupported=unsupported, errors=tuple(errors))
+    return _MemorySummary(
+        attempted=attempted,
+        refused=refused,
+        unsupported=unsupported,
+        planning_steps=planning_steps,
+        errors=tuple(errors),
+    )
 
 
 class BaselineRuntime(ABC):
@@ -241,6 +287,7 @@ class BaselineRuntime(ABC):
         summary = _record_agent_memory(agent, world)
         world.recorder.record(Sink.FINAL_ANSWER, "final_answer", answer)
         world.finalize_artifacts()
+        active_intent = getattr(agent, "active_intent", None)
         return RunTrace(
             baseline=baseline,
             scenario_id=scenario.scenario_id,
@@ -248,6 +295,8 @@ class BaselineRuntime(ABC):
             steps_attempted=summary.attempted,
             steps_refused=summary.refused,
             steps_unsupported=summary.unsupported,
+            planning_steps=summary.planning_steps,
+            active_intent_id=getattr(active_intent, "intent_id", None),
             decisions=tuple(capture.decisions),
             detected_values=frozenset(capture.detected_values),
             latencies_ms=capture.probe.samples_ms,
@@ -286,7 +335,7 @@ class UnguardedBaselineRuntime(BaselineRuntime):
 
 
 class SensitiveGuardBaselineRuntime(BaselineRuntime):
-    """B3: the full SensitiveGuard runtime and agent."""
+    """B3: full SensitiveGuard with dynamic intent narrowing and guarded planning."""
 
     def run(self, scenario: Scenario, world: ScenarioWorld) -> RunTrace:
         capture = BaselineCapture()
@@ -351,9 +400,15 @@ class SensitiveGuardBaselineRuntime(BaselineRuntime):
             database_executor=world.database_executor,
             rag_retriever=world.rag_retriever,
         )
-        agent = runtime.create_agent(
-            ScriptedPlanner(scenario, world.substitutions),
+        agent = DynamicSensitiveToolCallingAgent(
+            model=ScriptedPlanner(scenario, world.substitutions),
             tools=tools,
+            gateway=runtime.gateway,
+            privacy_context=runtime.context,
+            model_destination="external_llm",
+            intent_resolver=runtime.intent_resolver,
+            security_reviewer=runtime.security_reviewer,
+            planning_interval=1,
             max_steps=len(scenario.steps) + 2,
             verbosity_level=LogLevel.OFF,
         )
