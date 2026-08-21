@@ -26,6 +26,7 @@ _INTERNAL_DESTINATIONS = {
     "agent_memory",
     "database",
     "internal",
+    "internal_benchmark",
     "internal_database",
     "internal_file",
     "local",
@@ -34,6 +35,18 @@ _INTERNAL_DESTINATIONS = {
     "rag",
     "requester",
 }
+
+
+def _trusted_route_kind(value: Any) -> RouteKind | None:
+    if isinstance(value, RouteKind):
+        return value
+    if not isinstance(value, str) or not value.strip():
+        return None
+    normalized = value.strip().lower()
+    try:
+        return RouteKind(normalized)
+    except ValueError:
+        return None
 
 
 class PrivacyRouter:
@@ -116,12 +129,30 @@ class PrivacyRouter:
         operation: str,
         destination_hint: str | None = None,
     ) -> RouteDecision:
-        """Resolve a tool route without trusting model-provided route labels."""
+        """Resolve a tool route without trusting model-provided route labels.
+
+        Built-in tools use fixed name-based routes. Third-party application and
+        benchmark adapters may attach ``sensitiveguard_route_kind`` and
+        ``sensitiveguard_destination`` to a host-created SensitiveGuardTool.
+        Those attributes are part of its capability-manifest schema digest, so
+        they remain trusted host metadata rather than model-controlled input.
+        """
 
         name = str(getattr(tool, "name", "unknown"))
         mapping = arguments if isinstance(arguments, Mapping) else {}
         recipient: str | None = None
-        if name == "safe_http_post":
+
+        trusted_kind = _trusted_route_kind(getattr(tool, "sensitiveguard_route_kind", None))
+        trusted_destination = getattr(tool, "sensitiveguard_destination", None)
+        if trusted_kind is not None and isinstance(trusted_destination, str) and trusted_destination.strip():
+            destination = trusted_destination.strip().casefold()
+            kind = trusted_kind
+            recipient_argument = getattr(tool, "sensitiveguard_recipient_argument", None)
+            if isinstance(recipient_argument, str) and recipient_argument:
+                raw_recipient = mapping.get(recipient_argument)
+                if raw_recipient is not None:
+                    recipient = str(raw_recipient).strip() or None
+        elif name == "safe_http_post":
             url = mapping.get("url")
             if not isinstance(url, str):
                 return self._blocked(RouteKind.NETWORK, "unknown", "ROUTE_INVALID_URL")
@@ -155,16 +186,8 @@ class PrivacyRouter:
         elif name == "final_answer":
             destination, kind = "requester", RouteKind.REQUESTER
         elif name.startswith(FILESYSTEM_CAPABILITY_PREFIXES):
-            # Matching on the capability-name prefixes the host manifest uses,
-            # never on a substring: an unrelated tool such as ``customer_profile``
-            # merely contains "file" and must keep its internal route instead of
-            # failing review with a route/manifest mismatch.
             destination, kind = "internal_file", RouteKind.FILESYSTEM
         else:
-            # Unknown/custom tools are host-registered internal capabilities.
-            # A task-level destination describes the user's data flow, not the
-            # effective route of an arbitrary tool, so it must not relabel an
-            # internal capability as an external sink.
             destination, kind = "internal", RouteKind.LOCAL
 
         allowed_destinations = tuple(getattr(context, "allowed_destinations", ()) or ())
