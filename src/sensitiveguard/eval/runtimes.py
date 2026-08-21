@@ -1,18 +1,13 @@
-"""Executable B0-B3 baselines.
-
-``BaselineConfig`` in :mod:`sensitiveguard.eval.baselines` declares which
-capabilities a baseline has. This module turns those declarations into agent
-stacks that actually run, so the comparison table in the acceptance report is
-measured rather than asserted.
+"""Executable B0-B4 baselines.
 
 Every baseline is driven by the same scripted planner over the same
-:class:`~sensitiveguard.eval.world.ScenarioWorld`, which is what makes the
-resulting numbers attributable to the runtime instead of to model variance.
+:class:`~sensitiveguard.eval.world.ScenarioWorld`, so differences are
+attributable to the runtime instead of model variance.
 
-B3 deliberately exercises the current production security path: dynamic
-request-intent narrowing plus guarded planning. Planning calls are handled by
-the deterministic benchmark model without consuming a scripted action, so the
-same adversarial action sequence is replayed across B0-B3.
+B3 exercises the full static SensitiveGuard boundary. B4 adds signed
+request-intent narrowing and guarded planning. Planning calls are handled by
+the deterministic benchmark model without consuming a scripted action, so B0
+through B4 replay the same action sequence.
 """
 
 from __future__ import annotations
@@ -46,9 +41,6 @@ from .unguarded_tools import UNSUPPORTED, build_unguarded_tools
 from .world import ScenarioWorld
 
 
-# A policy refusal and a missing capability both stop a step, but only the first
-# is a candidate false block. Keeping them apart stops B0's absent features from
-# being scored as over-blocking.
 REFUSAL_MARKERS: tuple[str, ...] = (
     "BLOCKED",
     "APPROVAL_REQUIRED",
@@ -60,12 +52,7 @@ UNSUPPORTED_MARKERS: tuple[str, ...] = (UNSUPPORTED,)
 
 
 def build_default_detector(gliner_model: Any | None = None, *, threshold: float = 0.5) -> CompositeDetector:
-    """Build the detector every baseline shares.
-
-    Sharing one detector across baselines is deliberate: it removes detection
-    quality as a confounder, so the table measures what the runtime does with a
-    finding rather than how many findings each stack produced.
-    """
+    """Build the detector every baseline shares."""
 
     chain: list[Any] = [RegexDetector(), SecretDetector(), InjectionDetector()]
     if gliner_model is not None:
@@ -76,18 +63,7 @@ def build_default_detector(gliner_model: Any | None = None, *, threshold: float 
 
 
 class ScriptedPlanner(Model):
-    """Replay a scenario's tool calls as if a model had produced them.
-
-    Modelling the planner as a fixed script is the point rather than a
-    limitation: the security claim under test is that a *compromised or naive*
-    planner still cannot cause disclosure, so the planner is held constant and
-    adversarial while the runtime varies.
-
-    The dynamic B3 agent also invokes the model for explicit planning. Those
-    planning-only calls contain no tool schema, so they return a deterministic
-    textual plan and do not advance ``_index``. The next action generation then
-    receives exactly the same scripted tool call as the weaker baselines.
-    """
+    """Replay scenario tool calls while supporting B4 planning-only calls."""
 
     def __init__(self, scenario: Scenario, substitutions: Mapping[str, str]) -> None:
         super().__init__(model_id="sensitiveguard-benchmark-planner")
@@ -107,22 +83,18 @@ class ScriptedPlanner(Model):
     ) -> ChatMessage:
         del messages, stop_sequences, response_format, kwargs
         self.offered_tool_names.append(tuple(tool.name for tool in (tools_to_call_from or ())))
-
         if tools_to_call_from is None:
             self.planning_calls += 1
             return ChatMessage(
                 role=MessageRole.ASSISTANT,
                 content="Use only the authorized tools required by the current request; do not expand the host intent.",
             )
-
         if self._index < len(self._steps):
             step = self._steps[self._index]
             name = step.tool
             arguments: Any = step.resolved_arguments(self._substitutions)
             note = step.note
         else:
-            # The scripted plan can be cut short by a refusal. Fall back to a
-            # final answer instead of hanging the agent loop.
             name = "final_answer"
             arguments = {"answer": "The planned steps could not be completed."}
             note = ""
@@ -200,13 +172,7 @@ class _MemorySummary:
 
 
 def _record_agent_memory(agent: Any, world: ScenarioWorld) -> _MemorySummary:
-    """Push memory, recorded tool arguments, planning data and errors to the oracle.
-
-    Agent memory and the recorded tool-call arguments are separate exposure
-    surfaces: the first is replayed into every later prompt, the second is what
-    an operator or log pipeline sees. B3 planning input/output is also recorded
-    because guarded planning is part of the active security boundary.
-    """
+    """Push memory, tool arguments, guarded planning and errors into the oracle."""
 
     recorder = world.recorder
     attempted = 0
@@ -305,7 +271,7 @@ class BaselineRuntime(ABC):
 
 
 class UnguardedBaselineRuntime(BaselineRuntime):
-    """B0, B1 and B2: a stock ToolCallingAgent over unguarded tools."""
+    """B0, B1 and B2: stock ToolCallingAgent over unguarded tools."""
 
     def run(self, scenario: Scenario, world: ScenarioWorld) -> RunTrace:
         capture = BaselineCapture()
@@ -324,18 +290,11 @@ class UnguardedBaselineRuntime(BaselineRuntime):
             verbosity_level=LogLevel.OFF,
         )
         answer = agent.run(scenario.task)
-        return self._finish(
-            world,
-            answer,
-            agent,
-            baseline=self.baseline,
-            scenario=scenario,
-            capture=capture,
-        )
+        return self._finish(world, answer, agent, baseline=self.baseline, scenario=scenario, capture=capture)
 
 
 class SensitiveGuardBaselineRuntime(BaselineRuntime):
-    """B3: full SensitiveGuard with dynamic intent narrowing and guarded planning."""
+    """B3/B4: full SensitiveGuard, with B4 enabling dynamic intent/planning."""
 
     def run(self, scenario: Scenario, world: ScenarioWorld) -> RunTrace:
         capture = BaselineCapture()
@@ -351,14 +310,10 @@ class SensitiveGuardBaselineRuntime(BaselineRuntime):
             optional_fields=scenario.optional_fields,
             forbidden_fields=scenario.forbidden_fields,
             allowed_scope=scenario.allowed_scope,
-            run_id=f"bench-{scenario.scenario_id}",
+            run_id=f"bench-{scenario.scenario_id}-{self.baseline.value.lower()}",
         )
         known_destinations: tuple[str, ...] | None = None
         if scenario.known_external_destinations:
-            # Preserve the factory defaults and add the destinations this
-            # scenario's host has explicitly authorized, so an allowlisted
-            # recipient is graded against policy rather than against
-            # default-deny for an unrecognized destination.
             known_destinations = (
                 "external_llm",
                 "managed_agent",
@@ -372,25 +327,15 @@ class SensitiveGuardBaselineRuntime(BaselineRuntime):
             allowed_http_hosts=scenario.allowed_http_hosts,
             allow_http=scenario.allow_http,
             known_external_destinations=known_destinations,
-            # Benchmark hosts are non-resolvable placeholders. SSRF and
-            # DNS-rebinding defence is covered by the runtime's own security
-            # tests; disabling the resolver check here keeps this suite
-            # measuring disclosure rather than name resolution.
             allow_private_networks=True,
             allowed_database_tables={table: fields for table, fields in scenario.allowed_database_tables.items()},
             default_privacy_budget=scenario.privacy_budget,
             destination_budgets=dict(scenario.destination_budgets) or None,
         )
-        # Wrap the detector on the concrete gateway first, then the gateway
-        # itself: scan tools reach the detector directly, so both layers need
-        # instrumentation for the scorer to see every finding.
         recording_detector = RecordingDetector(runtime.detector, capture)
         runtime.detector = recording_detector
         runtime.gateway.detector = recording_detector
         runtime.gateway = RecordingGateway(runtime.gateway, capture)
-        # The benchmark proxy is the gateway exposed to every benchmark tool.
-        # Keep the reviewer bound to that exact proxy so instrumentation does
-        # not look like a cross-runtime capability injection.
         runtime.security_reviewer.gateway = runtime.gateway
         tools = runtime.build_tools(
             external_llm_client=world.llm_client,
@@ -400,27 +345,27 @@ class SensitiveGuardBaselineRuntime(BaselineRuntime):
             database_executor=world.database_executor,
             rag_retriever=world.rag_retriever,
         )
-        agent = DynamicSensitiveToolCallingAgent(
-            model=ScriptedPlanner(scenario, world.substitutions),
-            tools=tools,
-            gateway=runtime.gateway,
-            privacy_context=runtime.context,
-            model_destination="external_llm",
-            intent_resolver=runtime.intent_resolver,
-            security_reviewer=runtime.security_reviewer,
-            planning_interval=1,
-            max_steps=len(scenario.steps) + 2,
-            verbosity_level=LogLevel.OFF,
-        )
+        planner = ScriptedPlanner(scenario, world.substitutions)
+        common = {
+            "tools": tools,
+            "max_steps": len(scenario.steps) + 2,
+            "verbosity_level": LogLevel.OFF,
+        }
+        if self.config.dynamic_intent:
+            agent = DynamicSensitiveToolCallingAgent(
+                model=planner,
+                gateway=runtime.gateway,
+                privacy_context=runtime.context,
+                model_destination="external_llm",
+                intent_resolver=runtime.intent_resolver,
+                security_reviewer=runtime.security_reviewer,
+                planning_interval=1 if self.config.guarded_planning else None,
+                **common,
+            )
+        else:
+            agent = runtime.create_agent(planner, **common)
         answer = agent.run(scenario.task)
-        return self._finish(
-            world,
-            answer,
-            agent,
-            baseline=self.baseline,
-            scenario=scenario,
-            capture=capture,
-        )
+        return self._finish(world, answer, agent, baseline=self.baseline, scenario=scenario, capture=capture)
 
 
 def build_baseline_runtime(
