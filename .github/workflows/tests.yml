@@ -4,6 +4,7 @@ on:
   pull_request:
   push:
     branches:
+      - main
       - ci-*
 
 env:
@@ -32,12 +33,15 @@ jobs:
         run: |
           pip install --upgrade uv
 
-      # Install dependencies
       - name: Install dependencies
         run: |
           uv pip install "smolagents[test] @ ."
 
-      # Run tests
       - name: Test with pytest
         run: |
           pytest ./tests/
+
+      - name: SensitiveGuard acceptance gate
+        if: matrix.python-version == '3.12'
+        run: |
+          PYTHONPATH=src python -m sensitiveguard.eval
