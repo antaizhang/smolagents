@@ -74,14 +74,14 @@ def run_suite(
     runtimes: Sequence[BaselineRuntime] | None = None,
     baselines: Iterable[Baseline | str] | None = None,
     criteria: AcceptanceCriteria | None = None,
-    graded_baselines: Iterable[Baseline | str] = (Baseline.B3,),
+    graded_baselines: Iterable[Baseline | str] = (Baseline.B4,),
     workspace: Path | None = None,
 ) -> SuiteReport:
     """Execute every scenario under every baseline and build the report.
 
-    ``graded_baselines`` selects which rows the acceptance gate applies to. The
-    weaker baselines are measured for comparison, not held to the bar: B0 exists
-    precisely to fail it.
+    B0-B3 are comparison/ablation rows by default. B4 is the current release
+    gate because it is the production path that includes request-intent
+    narrowing and guarded planning.
     """
 
     if not scenarios:
