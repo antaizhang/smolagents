@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import time
+from collections.abc import Mapping
 from typing import Any
 
 from sensitiveguard.agent.sensitive_agent import SensitiveToolCallingAgent
@@ -20,18 +21,42 @@ from smolagents.utils import AgentGenerationError
 _TRANSFORM_FORMS = re.compile(r"\b(masked|masking|redacted|redacting|sanitized|sanitizing)\b", re.IGNORECASE)
 
 
+def _manifest_operation(value: Any) -> IntentOperation | None:
+    """Translate a trusted capability-manifest operation into IntentOperation."""
+
+    if isinstance(value, IntentOperation):
+        return value
+    if not isinstance(value, str) or not value.strip():
+        return None
+    normalized = value.strip().upper().replace("-", "_").replace(" ", "_")
+    try:
+        return IntentOperation[normalized]
+    except KeyError:
+        try:
+            return IntentOperation(normalized)
+        except ValueError:
+            return None
+
+
 def resolve_request_intent(
     resolver: Any,
     context: Any,
     request_text: str,
     *,
     parent: IntentSpec | None = None,
+    capability_operations: Mapping[str, str | IntentOperation] | None = None,
 ) -> IntentSpec:
     """Bind the current user request to a signed child intent.
 
     The trusted host intent remains the authorization ceiling. The user prompt
     can only narrow that ceiling; it can never grant a new operation,
     capability, effect, field, destination, or recipient.
+
+    ``capability_operations`` extends the built-in vocabulary with capability
+    manifests registered by the trusted host. This is required for benchmark
+    and application-specific tools: a third-party capability can participate in
+    request narrowing only after the host has registered its operation in the
+    manifest registry, never because the model named it in a prompt.
     """
 
     if not isinstance(request_text, str) or not request_text.strip():
@@ -62,6 +87,13 @@ def resolve_request_intent(
     for operation in requested_operations:
         requested_capabilities.update(_CAPABILITIES_BY_OPERATION[operation])
         requested_effects.update(_EFFECTS_BY_OPERATION[operation])
+
+    # Application/benchmark capabilities are trusted only through their host
+    # manifests. A model cannot invent a capability-operation binding here.
+    for capability, operation_value in (capability_operations or {}).items():
+        operation = _manifest_operation(operation_value)
+        if operation is not None and operation in requested_operations:
+            requested_capabilities.add(str(capability).strip().casefold())
 
     effective_capabilities = tuple(
         sorted(set(host_intent.allowed_capabilities) & requested_capabilities)
@@ -117,6 +149,22 @@ class DynamicSensitiveToolCallingAgent(SensitiveToolCallingAgent):
     def active_intent(self) -> IntentSpec | None:
         return self._active_intent
 
+    def _registered_capability_operations(self) -> dict[str, str]:
+        manifests = getattr(self.security_reviewer, "manifests", None)
+        if manifests is None:
+            return {}
+        result: dict[str, str] = {}
+        try:
+            names = manifests.names()
+        except Exception:
+            return result
+        for name in names:
+            try:
+                result[name] = manifests.get(name).operation
+            except Exception:
+                continue
+        return result
+
     def run(
         self,
         task: str,
@@ -153,6 +201,7 @@ class DynamicSensitiveToolCallingAgent(SensitiveToolCallingAgent):
                 self.privacy_context,
                 str(guarded_task.content),
                 parent=self._host_intent,
+                capability_operations=self._registered_capability_operations(),
             )
         except Exception:
             return self._blocked_run_result(stream, "The trusted request intent could not be established.")
@@ -296,12 +345,24 @@ class DynamicSensitiveToolCallingAgent(SensitiveToolCallingAgent):
         )
 
 
-def create_dynamic_agent(runtime: Any, model: Any, *, planning_interval: int | None = 1, **agent_kwargs: Any):
-    """Create a dynamic SensitiveGuard agent from an existing runtime."""
+def create_dynamic_agent(
+    runtime: Any,
+    model: Any,
+    *,
+    tools: list[Any] | None = None,
+    planning_interval: int | None = 1,
+    **agent_kwargs: Any,
+):
+    """Create a dynamic SensitiveGuard agent from an existing runtime.
+
+    ``tools`` may be supplied by a trusted benchmark/application adapter. The
+    normal SensitiveGuard constructor invariants still require every item to be
+    a SensitiveGuardTool bound to this exact runtime gateway and context.
+    """
 
     return DynamicSensitiveToolCallingAgent(
         model=model,
-        tools=runtime.build_tools(),
+        tools=tools if tools is not None else runtime.build_tools(),
         gateway=runtime.gateway,
         privacy_context=runtime.context,
         model_destination=agent_kwargs.pop("model_destination", "external_llm"),
