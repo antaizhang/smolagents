@@ -26,6 +26,34 @@ FILESYSTEM_CAPABILITY_PREFIXES: tuple[str, ...] = (
 )
 
 
+def _trusted_tool_profile(tool: Any) -> tuple[str, tuple[str, ...], tuple[str, ...], bool, bool] | None:
+    """Read a capability profile attached by trusted host adapter code.
+
+    Third-party benchmark tools keep their native names so native scorers can
+    inspect the trajectory. Their route/effect semantics therefore cannot be
+    inferred from SensitiveGuard's built-in naming convention. A host adapter
+    may attach the five ``sensitiveguard_*`` attributes below before the tool is
+    registered. They are covered by the manifest digest and checked again at
+    execution time, so a later mutation is rejected as an implementation change.
+    """
+
+    operation = getattr(tool, "sensitiveguard_operation", None)
+    if operation is None:
+        return None
+    operation_value = str(operation).strip().lower()
+    if not operation_value:
+        raise ValueError("sensitiveguard_operation must not be empty")
+    effects = tuple(str(item).strip().upper() for item in (getattr(tool, "sensitiveguard_effects", ()) or ()))
+    destinations = tuple(
+        str(item).strip().casefold() for item in (getattr(tool, "sensitiveguard_destinations", ()) or ()) if str(item).strip()
+    )
+    side_effect = getattr(tool, "sensitiveguard_side_effect", False)
+    explicit = getattr(tool, "sensitiveguard_requires_explicit_intent", True)
+    if not isinstance(side_effect, bool) or not isinstance(explicit, bool):
+        raise TypeError("trusted tool side-effect and explicit-intent flags must be booleans")
+    return operation_value, effects, destinations or ("internal",), side_effect, explicit
+
+
 @dataclass(frozen=True, slots=True)
 class CapabilityManifest:
     name: str
@@ -72,16 +100,25 @@ class CapabilityManifest:
         return "manifest_" + hashlib.sha256(_canonical(serialized)).hexdigest()
 
     @classmethod
-    def from_tool(cls, tool: Any) -> CapabilityManifest:
+    def from_tool(cls, tool: Any) -> "CapabilityManifest":
         """Build a conservative manifest from a host-supplied tool instance."""
 
         name = str(getattr(tool, "name", "")).strip()
-        operation, effects, destinations, side_effect, explicit = _profile_for_name(name)
+        profile = _trusted_tool_profile(tool) or _profile_for_name(name)
+        operation, effects, destinations, side_effect, explicit = profile
         implementation = f"{type(tool).__module__}.{type(tool).__qualname__}"
         implementation_digest = "impl_" + hashlib.sha256(implementation.encode()).hexdigest()
         schema = {
             "inputs": getattr(tool, "inputs", None),
             "output_type": getattr(tool, "output_type", None),
+            "operation": operation,
+            "effects": effects,
+            "destinations": destinations,
+            "side_effect": side_effect,
+            "requires_explicit_intent": explicit,
+            "route_kind": getattr(tool, "sensitiveguard_route_kind", None),
+            "destination": getattr(tool, "sensitiveguard_destination", None),
+            "recipient_argument": getattr(tool, "sensitiveguard_recipient_argument", None),
         }
         schema_digest = "schema_" + hashlib.sha256(_canonical(schema)).hexdigest()
         return cls(
@@ -101,6 +138,11 @@ class CapabilityManifest:
         current = type(self).from_tool(tool)
         return (
             current.name == self.name
+            and current.operation == self.operation
+            and current.effects == self.effects
+            and current.destinations == self.destinations
+            and current.side_effect == self.side_effect
+            and current.requires_explicit_intent == self.requires_explicit_intent
             and current.implementation_digest == self.implementation_digest
             and current.schema_digest == self.schema_digest
         )

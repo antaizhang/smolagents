@@ -1,8 +1,8 @@
 """Command line entry point: ``python -m sensitiveguard.eval``.
 
-Runs the shipped acceptance suite across the B0-B3 baselines, prints the
-comparison table, and exits non-zero when a graded baseline misses the bar so
-the same command works as a CI gate.
+Runs the shipped acceptance suite across B0-B4, prints the comparison table,
+and exits non-zero when the graded baseline misses the bar. B4 is graded by
+default; B0-B3 remain visible as ablation/comparison rows.
 """
 
 from __future__ import annotations
@@ -37,7 +37,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--baseline",
         action="append",
         choices=[item.value for item in Baseline],
-        help="Baseline to run; repeat for several (default: all of B0-B3)",
+        help="Baseline to run; repeat for several (default: all of B0-B4)",
     )
     parser.add_argument(
         "--benchmark",
@@ -49,7 +49,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--graded",
         action="append",
         choices=[item.value for item in Baseline],
-        help="Baseline the acceptance thresholds apply to (default: B3)",
+        help="Baseline the acceptance thresholds apply to (default: B4)",
     )
     parser.add_argument("--json", type=Path, default=None, help="Write the full machine-readable report here")
     parser.add_argument("--no-evidence", action="store_true", help="Omit the per-leak evidence section")
@@ -79,7 +79,7 @@ def main(argv: list[str] | None = None) -> int:
         scenarios,
         runtimes=runtimes,
         criteria=AcceptanceCriteria(),
-        graded_baselines=args.graded or (Baseline.B3,),
+        graded_baselines=args.graded or (Baseline.B4,),
     )
     print(render_report(report, include_evidence=not args.no_evidence))
     if args.json:
