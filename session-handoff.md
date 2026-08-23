@@ -2,9 +2,9 @@
 
 ## Current Objective
 
-- Goal: Integrate the four requested remote branches into the latest `main` candidate and leave a verified, push-ready history.
-- Current status: Done. Two branches were already ancestors of `main`; the two unique tips are preserved by merge commits and all conflicts are resolved.
-- Branch: `codex/integrate-four-branches-20260823` (ready to fast-forward `main`).
+- Goal: Replace the SensitiveGuard examples README with a detailed, executable evaluation guide.
+- Current status: Done. The guide covers the built-in B0-B4 gate and all six shipped external adapters, including official scoring and normalization.
+- Branch: `main`; the documentation changes are verified and maintained directly on the default branch.
 
 ## Completed This Session
 
@@ -14,6 +14,9 @@
 - [x] Integrated five-layer evaluation while retaining B4 as the release-gated dynamic runtime.
 - [x] Preserved model-planner, recovery, stability, token, dynamic-intent, and guarded-planning behavior through conflict resolution.
 - [x] Updated stale B4 test coverage and formatted the external benchmark additions.
+- [x] Replaced `examples/sensitiveguard/README.md` with the Chinese evaluation runbook.
+- [x] Added reproducible steps for AgentDojo, AgentThreatBench, PrivacyLens, AgentDAM, BFCL V4, and tau2-bench v1.0.1/tau3.
+- [x] Recorded dependency isolation, scorer authority, sensitive-artifact handling, fairness controls, and known adapter limitations.
 
 ## Verification Evidence
 
@@ -24,12 +27,14 @@
 | Format | `ruff format --check src/sensitiveguard tests/sensitiveguard` | clean | |
 | Harness | `./init.sh` | GREEN | install + quality + tests + compile |
 | Acceptance | `PYTHONPATH=src python -m sensitiveguard.eval` | B4 PASS | 30 scenarios / 150 runs |
+| Adapter tests | `pytest tests/sensitiveguard/test_external_eval_adapters.py` | 3 passed | native-result normalizers |
+| External registry | `python -m sensitiveguard.eval.external --list` | 6 adapters listed | runner modules resolved |
+| README structure | local-link/fence checks + `git diff --check` | clean | 146 fence delimiters, all paired |
 
 ## Files Changed
 
-- Runtime evaluation files from `claude/sensitiveguard-agent-runtime-g8nsdq`.
-- Harness artifacts and authority-narrowing changes from `claude/security-features-spec-review-t64keb`.
-- Integration compatibility fixes in the evaluation suite, external adapters, capability manifest, and B4 catalog test.
+- `examples/sensitiveguard/README.md`: full evaluation manual.
+- `feature_list.json`, `progress.md`, `session-handoff.md`: current evidence and handoff state.
 
 ## Decisions Made
 
@@ -39,6 +44,9 @@
 ## Blockers / Risks
 
 - Full-repo `make test` needs `[test]` extras that fail to build here (helium, Wikipedia-API). Tracked as feat-011.
+- PrivacyLens action generation remains blocked by its legacy OpenAI/Pydantic pins versus the current LiteLLM stack.
+- External benchmark environments and official full datasets were not executed in this local session.
+- Torch emits a NumPy ABI warning, but the focused suite remains green.
 
 ## Next Session Startup
 
@@ -49,4 +57,4 @@
 
 ## Recommended Next Step
 
-- feat-011: extend the green baseline to the whole repo (`make quality && make test`) once the example/test extras can be installed.
+- Review the new evaluation runbook, then either execute the desired external benchmark with its isolated infrastructure or continue feat-011.

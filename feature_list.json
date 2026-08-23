@@ -79,7 +79,7 @@
       "description": "Executable benchmark, scenario runner, sinks and acceptance report (src/sensitiveguard/eval/).",
       "dependencies": ["feat-007"],
       "status": "done",
-      "evidence": "Five-layer B0-B4 harness covered by test_benchmark_harness.py and test_demo_server.py (part of 310 passing); `python -m sensitiveguard.eval` reports B4 PASS."
+      "evidence": "Five-layer B0-B4 harness covered by test_benchmark_harness.py and test_demo_server.py; examples/sensitiveguard/README.md now documents the internal gate, real-model runs, custom JSONL, and end-to-end AgentDojo, AgentThreatBench, PrivacyLens, AgentDAM, BFCL, and tau3 workflows. `./init.sh` => 310 passed and `python -m sensitiveguard.eval` => B4 PASS across 30 scenarios / 150 runs (2026-08-23)."
     },
     {
       "id": "feat-011",

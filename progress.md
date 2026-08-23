@@ -3,7 +3,7 @@
 ## Current State
 
 **Last Updated:** 2026-08-23
-**Active Feature:** None — four requested remote branches integrated into the latest `main` candidate.
+**Active Feature:** None — the evaluation/acceptance feature now has a complete operator runbook.
 
 ## Status
 
@@ -20,6 +20,8 @@
 - [x] Merged the agent-runtime branch, preserving B4 dynamic intent/guarded planning while adding five-layer evaluation, model-planner, recovery, stability, and token metrics.
 - [x] Merged the Harness Engineering branch and applied its authority-narrowing fix to host-registered capabilities.
 - [x] Repaired stale `main` lint/format issues and updated the baseline catalog test for B4.
+- [x] Replaced `examples/sensitiveguard/README.md` with a detailed Chinese evaluation manual covering the built-in gate, real-model and custom-data runs, plus AgentDojo, AgentThreatBench, PrivacyLens, AgentDAM, BFCL, and tau3.
+- [x] Documented which external component is replaced by each bridge, where the authoritative scorer runs, how native results are normalized, and which integrations remain constrained or unverified.
 
 ### What's In Progress
 
@@ -32,6 +34,9 @@
 ## Blockers / Risks
 
 - [ ] The smolagents `[dev]`/`[test]` extras fail to build in this environment (helium, Wikipedia-API) and pull the heavyweight `[all]` set. `init.sh` deliberately installs only core + pytest + ruff. Full-repo `make test` may need those extras and is not yet covered by the harness (tracked as feat-011).
+- [ ] PrivacyLens is not currently zero-config runnable: its pinned OpenAI 0.28/Pydantic 1.10 helper conflicts with the current LiteLLM/OpenAI stack. The runbook marks action generation as blocked until a compatible loader or isolated image is verified.
+- [ ] The external benchmark packages and their expensive native environments were audited but not installed or run end to end in this workspace. Their official scorers remain the source of truth.
+- [ ] The local Torch build emits a non-blocking NumPy 1.x versus NumPy 2.4.6 compatibility warning; all focused tests still pass.
 
 ## Decisions Made
 
@@ -40,6 +45,8 @@
 - **Fix the failing security test rather than record it as a blocker**: the spec requires baseline verification to pass before adding scope, and the failure was a genuine capability-expansion bug.
 - **Preserve B4 as the default release gate**: when only a smaller baseline set is selected, grade the strongest selected baseline instead of producing an empty acceptance report.
 - **Combine both sides of the runtime conflict**: retain dynamic intent and guarded planning from `main`, plus the runtime branch's five evaluation layers and model-planner metrics.
+- **Keep official external scorers authoritative**: `sensitiveguard.eval.external` only normalizes their numeric outputs; bridge startup or normalized JSON alone is not evidence that a benchmark completed.
+- **Disclose adapter coverage, not just commands**: the runbook calls out PrivacyLens/AgentDAM B3-B4 equivalence, BFCL endpoint/history limitations, and tau3's text-only utility focus.
 
 ## Files Modified This Session
 
@@ -48,6 +55,8 @@
 - Harness artifacts are present and updated to the current verification result.
 - External benchmark files received formatting/import cleanup required by the harness gate.
 - `tests/sensitiveguard/test_evaluation.py` now validates the shipped B4 baseline.
+- `examples/sensitiveguard/README.md` is now the detailed evaluation runbook.
+- `feature_list.json`, `progress.md`, and `session-handoff.md` record the documentation and verification evidence.
 
 ## Evidence of Completion
 
@@ -55,9 +64,14 @@
 - [x] Quality clean: `ruff check src/sensitiveguard tests/sensitiveguard` → `All checks passed!`; `ruff format --check ...` → clean.
 - [x] Full harness: `./init.sh` → "Verification Complete (baseline is GREEN)".
 - [x] Acceptance: `PYTHONPATH=src python -m sensitiveguard.eval` → B4 `PASS` across 30 scenarios / 150 runs.
+- [x] External adapter unit tests: `pytest tests/sensitiveguard/test_external_eval_adapters.py` → 3 passed.
+- [x] External CLI inventory: `python -m sensitiveguard.eval.external --list` → all six adapters registered.
+- [x] README checks: local links exist, 146 fenced-code delimiters are balanced, and `git diff --check` is clean.
 
 ## Notes for Next Session
 
 The authority-narrowing regression remains encoded in
 `tests/sensitiveguard/test_dynamic_agent.py::test_user_prompt_cannot_expand_host_authority`.
 Full-repo CI parity remains tracked as feat-011.
+External benchmark runs require their upstream datasets, model services, scorer credentials/GPU, and isolated environments;
+the README intentionally does not claim those expensive runs were executed locally.
