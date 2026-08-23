@@ -67,8 +67,8 @@ source ../.venv/bin/activate
 
 export SG_REPO="$PWD"
 export PYTHONPATH="$SG_REPO/src"
-export BENCH_ROOT=/absolute/path/to/private/benchmarks
-export REPORT_ROOT=/absolute/path/to/private/eval-reports
+export BENCH_ROOT=/home/smo/smolagents-main/benchmarks
+export REPORT_ROOT=/home/smo/smolagents-main/eval-reports
 
 mkdir -p "$BENCH_ROOT" "$REPORT_ROOT"
 ~~~
