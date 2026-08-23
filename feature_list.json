@@ -7,7 +7,7 @@
       "description": "A clean checkout can install the SensitiveGuard toolchain and run the quality gate and test suite via ./init.sh with a green result.",
       "dependencies": [],
       "status": "done",
-      "evidence": "./init.sh => ruff check clean, ruff format --check clean, 293 passed in ~4.7s, compileall clean."
+      "evidence": "./init.sh => ruff check clean, ruff format --check clean, 310 passed in ~34s, compileall clean (2026-08-23)."
     },
     {
       "id": "feat-002",
@@ -15,7 +15,7 @@
       "description": "Signed IntentSpec ceiling with rule-based operation inference, capability/effect derivation, and plan validation (src/sensitiveguard/intent/).",
       "dependencies": ["feat-001"],
       "status": "done",
-      "evidence": "tests/sensitiveguard/test_intent.py (part of 293 passing)."
+      "evidence": "tests/sensitiveguard/test_intent.py (part of 310 passing)."
     },
     {
       "id": "feat-003",
@@ -23,7 +23,7 @@
       "description": "Bind the current guarded user prompt to a signed child intent that can only narrow the host ceiling, never expand it (src/sensitiveguard/dynamic_agent.py).",
       "dependencies": ["feat-002"],
       "status": "done",
-      "evidence": "Fixed capability/effect leak (derived from surviving effective_operations, not full requested set). tests/sensitiveguard/test_dynamic_agent.py::test_user_prompt_cannot_expand_host_authority now passes; full suite 293 passed."
+      "evidence": "Built-in and host-registered capabilities/effects derive only from surviving effective_operations. tests/sensitiveguard/test_dynamic_agent.py::test_user_prompt_cannot_expand_host_authority passes; full suite 310 passed."
     },
     {
       "id": "feat-004",
@@ -31,7 +31,7 @@
       "description": "Sensitive-data and prompt-injection detection over normalized and encoded inputs (src/sensitiveguard/detector/).",
       "dependencies": ["feat-001"],
       "status": "done",
-      "evidence": "Detection covered across the SensitiveGuard suite (293 passing); walkthrough in examples/sensitiveguard/detection/."
+      "evidence": "Detection covered across the SensitiveGuard suite (310 passing); walkthrough in examples/sensitiveguard/detection/."
     },
     {
       "id": "feat-005",
@@ -39,7 +39,7 @@
       "description": "Route models and destinations by detection result, forbidding silent external fallback (src/sensitiveguard/routing/).",
       "dependencies": ["feat-002"],
       "status": "done",
-      "evidence": "tests/sensitiveguard/test_routing_review_security.py (part of 293 passing)."
+      "evidence": "tests/sensitiveguard/test_routing_review_security.py (part of 310 passing)."
     },
     {
       "id": "feat-006",
@@ -47,7 +47,7 @@
       "description": "Policy review and signed permits governing capability execution (src/sensitiveguard/review/).",
       "dependencies": ["feat-005"],
       "status": "done",
-      "evidence": "tests/sensitiveguard/test_routing_review_security.py (part of 293 passing)."
+      "evidence": "tests/sensitiveguard/test_routing_review_security.py (part of 310 passing)."
     },
     {
       "id": "feat-007",
@@ -55,7 +55,7 @@
       "description": "Capability-scoped tool gateway, fail-closed command execution, and egress inspection/masking (src/sensitiveguard/runtime/).",
       "dependencies": ["feat-006"],
       "status": "done",
-      "evidence": "tests/sensitiveguard/test_safe_command.py, test_egress_inspector.py, test_agent_runtime.py (part of 293 passing)."
+      "evidence": "tests/sensitiveguard/test_safe_command.py, test_egress_inspector.py, test_agent_runtime.py (part of 310 passing)."
     },
     {
       "id": "feat-008",
@@ -63,7 +63,7 @@
       "description": "Track data lineage/provenance and mark failed side effects as indeterminate rather than committed (src/sensitiveguard/lineage/).",
       "dependencies": ["feat-002"],
       "status": "done",
-      "evidence": "tests/sensitiveguard/test_lineage.py (part of 293 passing)."
+      "evidence": "tests/sensitiveguard/test_lineage.py (part of 310 passing)."
     },
     {
       "id": "feat-009",
@@ -71,7 +71,7 @@
       "description": "Structured audit events with private-canary sanitization so secrets never enter logs (src/sensitiveguard/audit/).",
       "dependencies": ["feat-001"],
       "status": "done",
-      "evidence": "Audit sanitization asserted across the SensitiveGuard suite (293 passing)."
+      "evidence": "Audit sanitization asserted across the SensitiveGuard suite (310 passing)."
     },
     {
       "id": "feat-010",
@@ -79,7 +79,7 @@
       "description": "Executable benchmark, scenario runner, sinks and acceptance report (src/sensitiveguard/eval/).",
       "dependencies": ["feat-007"],
       "status": "done",
-      "evidence": "tests/sensitiveguard/test_benchmark_harness.py, test_demo_server.py (part of 293 passing)."
+      "evidence": "Five-layer B0-B4 harness covered by test_benchmark_harness.py and test_demo_server.py (part of 310 passing); `python -m sensitiveguard.eval` reports B4 PASS."
     },
     {
       "id": "feat-011",

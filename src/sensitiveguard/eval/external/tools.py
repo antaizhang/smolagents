@@ -169,7 +169,9 @@ class SensitiveExternalTool(SensitiveGuardTool):
                 )
             arguments = guarded.content
             if not isinstance(arguments, Mapping):
-                return self.safe_block("The protected benchmark arguments are not a mapping.", status=GuardStatus.BLOCKED)
+                return self.safe_block(
+                    "The protected benchmark arguments are not a mapping.", status=GuardStatus.BLOCKED
+                )
             arguments = dict(arguments)
 
         self.mark_execution_started()
@@ -250,7 +252,9 @@ def infer_external_tool_spec(
             description=description,
             inputs=inputs,
             operation="send",
-            effects=("WRITE", "NETWORK", "EXTERNAL", "MESSAGE") if route is RouteKind.MESSAGE else ("WRITE", "NETWORK", "EXTERNAL"),
+            effects=("WRITE", "NETWORK", "EXTERNAL", "MESSAGE")
+            if route is RouteKind.MESSAGE
+            else ("WRITE", "NETWORK", "EXTERNAL"),
             destination="benchmark_external",
             route_kind=route.value,
             side_effect=True,
@@ -309,7 +313,9 @@ def build_sensitive_external_tools(
     recorder: ExternalCallRecorder | None = None,
 ) -> list[SensitiveExternalTool]:
     return [
-        SensitiveExternalTool(spec=spec, executor=executor, gateway=runtime.gateway, context=runtime.context, recorder=recorder)
+        SensitiveExternalTool(
+            spec=spec, executor=executor, gateway=runtime.gateway, context=runtime.context, recorder=recorder
+        )
         for spec, executor in bindings
     ]
 

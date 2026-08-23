@@ -3,7 +3,7 @@
 Two layers live here. The metric primitives (``AgentEvalSample``,
 ``EntityMetrics``) define what is measured; the benchmark harness
 (``Scenario``, ``run_suite``, ``AcceptanceCriteria``) actually produces those
-measurements by running scenarios against executable B0-B3 baselines and
+measurements by running scenarios against executable B0-B4 baselines and
 comparing recorded sink traffic to planted ground truth.
 
 Run the shipped acceptance suite with ``python -m sensitiveguard.eval``.

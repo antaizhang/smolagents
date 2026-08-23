@@ -45,7 +45,9 @@ def _trusted_tool_profile(tool: Any) -> tuple[str, tuple[str, ...], tuple[str, .
         raise ValueError("sensitiveguard_operation must not be empty")
     effects = tuple(str(item).strip().upper() for item in (getattr(tool, "sensitiveguard_effects", ()) or ()))
     destinations = tuple(
-        str(item).strip().casefold() for item in (getattr(tool, "sensitiveguard_destinations", ()) or ()) if str(item).strip()
+        str(item).strip().casefold()
+        for item in (getattr(tool, "sensitiveguard_destinations", ()) or ())
+        if str(item).strip()
     )
     side_effect = getattr(tool, "sensitiveguard_side_effect", False)
     explicit = getattr(tool, "sensitiveguard_requires_explicit_intent", True)

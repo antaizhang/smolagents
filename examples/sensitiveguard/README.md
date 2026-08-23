@@ -237,15 +237,16 @@ isolation.
 
 ## Benchmark suite
 
-The demos show three paths. The benchmark suite measures all eight of them across four baselines:
+The demos show three paths. The benchmark suite measures all eight of them across five baselines:
 
 ```bash
 PYTHONPATH=src python -m sensitiveguard.eval
 ```
 
-This runs 26 scenarios under B0 (raw smolagents), B1 (detection only), B2 (uniform redaction) and B3 (full
-SensitiveGuard), prints the comparison table, and exits non-zero if a graded baseline misses the acceptance bar — so
-the same command works as a CI gate. It needs no model and no network, and finishes in a few seconds.
+This runs 30 scenarios under B0 (raw smolagents), B1 (detection only), B2 (uniform redaction), B3 (full static
+SensitiveGuard), and B4 (dynamic request intent plus guarded planning). It prints the comparison table and exits
+non-zero if the B4 release gate misses the acceptance bar, so the same command works as a CI gate. It needs no model
+and no network, and finishes in a few seconds.
 
 Useful flags:
 

@@ -9,6 +9,7 @@ from .base import BenchmarkAdapter
 from .models import ExternalBenchmarkComparison, ExternalBenchmarkResult
 from .tools import ExternalCallRecorder, ExternalToolSpec, RawExternalTool, SensitiveExternalTool
 
+
 __all__ = [
     "BenchmarkAdapter",
     "BenchmarkResultAdapter",

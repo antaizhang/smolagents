@@ -2,8 +2,8 @@
 
 ## Current State
 
-**Last Updated:** 2026-08-20
-**Active Feature:** feat-003 (Dynamic request-intent binding) — completed this session; harness scaffolding added.
+**Last Updated:** 2026-08-23
+**Active Feature:** None — four requested remote branches integrated into the latest `main` candidate.
 
 ## Status
 
@@ -16,10 +16,14 @@
 - [x] Added `progress.md` and `session-handoff.md` (Lifecycle).
 - [x] Fixed a real security bug: `resolve_request_intent` leaked capabilities/effects when no requested operation survived the host-ceiling intersection.
 - [x] Fixed 3 pre-existing quality errors in the security code (2× I001 import sort, 1× F401 unused import).
+- [x] Confirmed the dynamic-intent and sensitive-data-detection branches were already ancestors of `main`.
+- [x] Merged the agent-runtime branch, preserving B4 dynamic intent/guarded planning while adding five-layer evaluation, model-planner, recovery, stability, and token metrics.
+- [x] Merged the Harness Engineering branch and applied its authority-narrowing fix to host-registered capabilities.
+- [x] Repaired stale `main` lint/format issues and updated the baseline catalog test for B4.
 
 ### What's In Progress
 
-- [ ] None. Baseline is green and committed to the branch.
+- [ ] None. Integration baseline is green.
 
 ### What's Next
 
@@ -34,26 +38,26 @@
 - **Scope `init.sh` to `src/sensitiveguard` + `tests/sensitiveguard`**: the security features are the subject of this work, and the repo-wide test deps don't build here. Repo-wide gate is documented in `AGENTS.md` for when those deps are available.
   - Alternatives considered: installing `.[test]` (fails to build); skipping verification (violates the spec's evidence requirement).
 - **Fix the failing security test rather than record it as a blocker**: the spec requires baseline verification to pass before adding scope, and the failure was a genuine capability-expansion bug.
+- **Preserve B4 as the default release gate**: when only a smaller baseline set is selected, grade the strongest selected baseline instead of producing an empty acceptance report.
+- **Combine both sides of the runtime conflict**: retain dynamic intent and guarded planning from `main`, plus the runtime branch's five evaluation layers and model-planner metrics.
 
 ## Files Modified This Session
 
-- `AGENTS.md` — full Instructions subsystem (was a 3-line stub).
-- `feature_list.json` — new; State/Scope tracker.
-- `init.sh` — new; Verification path.
-- `progress.md` — new; this log.
-- `session-handoff.md` — new; Lifecycle handoff.
-- `src/sensitiveguard/dynamic_agent.py` — derive child capabilities/effects from surviving `effective_operations`; remove unused import.
-- `src/sensitiveguard/__init__.py`, `src/sensitiveguard/llm.py` — import-sort fixes (ruff I001).
+- Merge commits preserve both unmerged remote branch tips in history.
+- Evaluation runtime/CLI/report/scenario files now combine B4 and five-layer evaluation behavior.
+- Harness artifacts are present and updated to the current verification result.
+- External benchmark files received formatting/import cleanup required by the harness gate.
+- `tests/sensitiveguard/test_evaluation.py` now validates the shipped B4 baseline.
 
 ## Evidence of Completion
 
-- [x] Tests pass: `python -m pytest tests/sensitiveguard -q` → `293 passed`.
+- [x] Tests pass: `python -m pytest tests/sensitiveguard -q` → `310 passed`.
 - [x] Quality clean: `ruff check src/sensitiveguard tests/sensitiveguard` → `All checks passed!`; `ruff format --check ...` → clean.
 - [x] Full harness: `./init.sh` → "Verification Complete (baseline is GREEN)".
+- [x] Acceptance: `PYTHONPATH=src python -m sensitiveguard.eval` → B4 `PASS` across 30 scenarios / 150 runs.
 
 ## Notes for Next Session
 
-The regression that motivated the dynamic_agent fix is
+The authority-narrowing regression remains encoded in
 `tests/sensitiveguard/test_dynamic_agent.py::test_user_prompt_cannot_expand_host_authority`.
-It encodes a core security invariant: a user prompt must never expand the host
-authority ceiling. Keep it green.
+Full-repo CI parity remains tracked as feat-011.

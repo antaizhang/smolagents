@@ -184,7 +184,9 @@ def build_tau_agent_class():
                 state.runtime.context,
                 GuardStage.TOOL_INPUT,
                 destination=destination,
-                recipient=str(arguments.get(spec.recipient_argument)) if spec.recipient_argument and arguments.get(spec.recipient_argument) else None,
+                recipient=str(arguments.get(spec.recipient_argument))
+                if spec.recipient_argument and arguments.get(spec.recipient_argument)
+                else None,
                 tool_name=name,
                 record_disclosure=spec.external,
             )
@@ -236,7 +238,9 @@ def build_tau_agent_class():
                 if native_calls:
                     assistant = AssistantMessage(role="assistant", content=None, tool_calls=native_calls)
                 else:
-                    assistant = AssistantMessage(role="assistant", content=block_reason or "The requested action was blocked.")
+                    assistant = AssistantMessage(
+                        role="assistant", content=block_reason or "The requested action was blocked."
+                    )
             else:
                 candidate = _content_text(response)
                 if self.runtime_label != "B0" and state.runtime is not None:
@@ -248,10 +252,14 @@ def build_tau_agent_class():
                         tool_name="tau3_final_answer",
                         record_disclosure=True,
                     )
-                    candidate = str(guarded.content) if guarded.allowed else "The answer was withheld by privacy policy."
+                    candidate = (
+                        str(guarded.content) if guarded.allowed else "The answer was withheld by privacy policy."
+                    )
                 assistant = AssistantMessage(role="assistant", content=candidate)
             state.native_messages.append(assistant)
-            state.safe_history.append(("assistant", _content_text(assistant) if not assistant.tool_calls else "[tool call]"))
+            state.safe_history.append(
+                ("assistant", _content_text(assistant) if not assistant.tool_calls else "[tool call]")
+            )
             return assistant, state
 
     return SensitiveGuardTauAgent

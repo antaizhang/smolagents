@@ -51,16 +51,23 @@ def _first(native: Mapping[str, Any], *names: str) -> Any:
 
 class AgentDojoAdapter(BenchmarkAdapter):
     def __init__(self) -> None:
-        super().__init__("agentdojo", "AgentDojo native utility/security scorer", "sensitiveguard.eval.external.agentdojo")
+        super().__init__(
+            "agentdojo", "AgentDojo native utility/security scorer", "sensitiveguard.eval.external.agentdojo"
+        )
 
     def normalize(self, native, *, runtime, model, benchmark_version="unknown"):
         utility_raw = _first(native, "utility_results", "utility")
         security_raw = _first(native, "security_results", "security")
         utility, security = _mean(utility_raw), _mean(security_raw)
         return self._result(
-            benchmark=self.name, benchmark_version=benchmark_version, runtime=runtime, model=model,
-            sample_count=max(_count(utility_raw), _count(security_raw)), native=native,
-            utility_score=utility, security_score=security,
+            benchmark=self.name,
+            benchmark_version=benchmark_version,
+            runtime=runtime,
+            model=model,
+            sample_count=max(_count(utility_raw), _count(security_raw)),
+            native=native,
+            utility_score=utility,
+            security_score=security,
             attack_success_rate=None if security is None else 1.0 - security,
         )
 
@@ -78,16 +85,23 @@ class AgentThreatBenchAdapter(BenchmarkAdapter):
         security_raw = _first(native, "security", "security_results", "security_score")
         utility, security = _mean(utility_raw), _mean(security_raw)
         return self._result(
-            benchmark=self.name, benchmark_version=benchmark_version, runtime=runtime, model=model,
-            sample_count=max(_count(utility_raw), _count(security_raw)), native=native,
-            utility_score=utility, security_score=security,
+            benchmark=self.name,
+            benchmark_version=benchmark_version,
+            runtime=runtime,
+            model=model,
+            sample_count=max(_count(utility_raw), _count(security_raw)),
+            native=native,
+            utility_score=utility,
+            security_score=security,
             attack_success_rate=None if security is None else 1.0 - security,
         )
 
 
 class PrivacyLensAdapter(BenchmarkAdapter):
     def __init__(self) -> None:
-        super().__init__("privacylens", "PrivacyLens action leakage/helpfulness scorer", "sensitiveguard.eval.external.privacylens")
+        super().__init__(
+            "privacylens", "PrivacyLens action leakage/helpfulness scorer", "sensitiveguard.eval.external.privacylens"
+        )
 
     def normalize(self, native, *, runtime, model, benchmark_version="unknown"):
         leakage_raw = _first(native, "leakage_rate", "leakage")
@@ -97,16 +111,23 @@ class PrivacyLensAdapter(BenchmarkAdapter):
         # that untouched in native_metrics rather than fabricating a rate.
         utility_rate = utility if utility is None or 0.0 <= utility <= 1.0 else None
         return self._result(
-            benchmark=self.name, benchmark_version=benchmark_version, runtime=runtime, model=model,
-            sample_count=max(_count(leakage_raw), _count(utility_raw)), native=native,
-            leakage_rate=leakage, utility_score=utility_rate,
+            benchmark=self.name,
+            benchmark_version=benchmark_version,
+            runtime=runtime,
+            model=model,
+            sample_count=max(_count(leakage_raw), _count(utility_raw)),
+            native=native,
+            leakage_rate=leakage,
+            utility_score=utility_rate,
             security_score=None if leakage is None else 1.0 - leakage,
         )
 
 
 class AgentDAMAdapter(BenchmarkAdapter):
     def __init__(self) -> None:
-        super().__init__("agentdam", "AgentDAM data-minimization/privacy output", "sensitiveguard.eval.external.agentdam")
+        super().__init__(
+            "agentdam", "AgentDAM data-minimization/privacy output", "sensitiveguard.eval.external.agentdam"
+        )
 
     def normalize(self, native, *, runtime, model, benchmark_version="unknown"):
         minimize_raw = _first(native, "data_minimization_rate", "minimization_rate", "privacy_score")
@@ -117,25 +138,38 @@ class AgentDAMAdapter(BenchmarkAdapter):
         if leakage is None and minimization is not None:
             leakage = 1.0 - minimization if 0.0 <= minimization <= 1.0 else None
         return self._result(
-            benchmark=self.name, benchmark_version=benchmark_version, runtime=runtime, model=model,
-            sample_count=max(_count(minimize_raw), _count(task_raw), _count(leakage_raw)), native=native,
-            data_minimization_rate=minimization, leakage_rate=leakage,
+            benchmark=self.name,
+            benchmark_version=benchmark_version,
+            runtime=runtime,
+            model=model,
+            sample_count=max(_count(minimize_raw), _count(task_raw), _count(leakage_raw)),
+            native=native,
+            data_minimization_rate=minimization,
+            leakage_rate=leakage,
             security_score=None if leakage is None else 1.0 - leakage,
-            task_success_rate=_mean(task_raw), utility_score=_mean(task_raw),
+            task_success_rate=_mean(task_raw),
+            utility_score=_mean(task_raw),
         )
 
 
 class BFCLAdapter(BenchmarkAdapter):
     def __init__(self) -> None:
-        super().__init__("bfcl", "Berkeley Function Calling Leaderboard native accuracy", "sensitiveguard.eval.external.bfcl")
+        super().__init__(
+            "bfcl", "Berkeley Function Calling Leaderboard native accuracy", "sensitiveguard.eval.external.bfcl"
+        )
 
     def normalize(self, native, *, runtime, model, benchmark_version="unknown"):
         accuracy_raw = _first(native, "tool_call_accuracy", "accuracy", "overall_accuracy")
         accuracy = _mean(accuracy_raw)
         return self._result(
-            benchmark=self.name, benchmark_version=benchmark_version, runtime=runtime, model=model,
-            sample_count=_count(accuracy_raw), native=native,
-            tool_call_accuracy=accuracy, utility_score=accuracy,
+            benchmark=self.name,
+            benchmark_version=benchmark_version,
+            runtime=runtime,
+            model=model,
+            sample_count=_count(accuracy_raw),
+            native=native,
+            tool_call_accuracy=accuracy,
+            utility_score=accuracy,
         )
 
 
@@ -147,16 +181,26 @@ class Tau3Adapter(BenchmarkAdapter):
         task_raw = _first(native, "task_success_rate", "reward", "rewards", "success")
         task_success = _mean(task_raw)
         return self._result(
-            benchmark=self.name, benchmark_version=benchmark_version, runtime=runtime, model=model,
-            sample_count=_count(task_raw), native=native,
-            task_success_rate=task_success, utility_score=task_success,
+            benchmark=self.name,
+            benchmark_version=benchmark_version,
+            runtime=runtime,
+            model=model,
+            sample_count=_count(task_raw),
+            native=native,
+            task_success_rate=task_success,
+            utility_score=task_success,
         )
 
 
 _ADAPTERS: dict[str, BenchmarkAdapter] = {
     adapter.name: adapter
     for adapter in (
-        AgentDojoAdapter(), AgentThreatBenchAdapter(), PrivacyLensAdapter(), AgentDAMAdapter(), BFCLAdapter(), Tau3Adapter()
+        AgentDojoAdapter(),
+        AgentThreatBenchAdapter(),
+        PrivacyLensAdapter(),
+        AgentDAMAdapter(),
+        BFCLAdapter(),
+        Tau3Adapter(),
     )
 }
 

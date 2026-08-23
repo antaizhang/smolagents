@@ -29,7 +29,7 @@ def _table(header: Sequence[str], rows: Sequence[Sequence[str]]) -> str:
 
 
 def render_baseline_table(report: SuiteReport) -> str:
-    """One row per baseline: the B0-B3 comparison the design document asks for."""
+    """One row per baseline in the B0-B4 comparison."""
 
     metrics = tuple(PRIMARY_METRIC_ORDER)
     header = ["Baseline", "Capabilities", *(PRIMARY_METRIC_ORDER[name] for name in metrics), "p95ms"]

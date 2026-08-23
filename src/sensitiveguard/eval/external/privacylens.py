@@ -19,10 +19,10 @@ from pathlib import Path
 from typing import Any
 
 from sensitiveguard.dynamic_agent import resolve_request_intent
+from sensitiveguard.factory import SensitiveGuardRuntime
 from sensitiveguard.llm import build_ollama_model
 from sensitiveguard.models import GuardStage
 from sensitiveguard.privacy import PrivacyContext
-from sensitiveguard.factory import SensitiveGuardRuntime
 from smolagents.models import ChatMessage, MessageRole
 
 

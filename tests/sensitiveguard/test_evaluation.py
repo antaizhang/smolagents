@@ -242,24 +242,30 @@ def test_benchmark_catalog_contains_exactly_the_eight_design_benchmarks():
         get_benchmark("PII-Unknown")
 
 
-def test_baseline_catalog_encodes_b0_through_b3_without_models_or_network():
+def test_baseline_catalog_encodes_b0_through_b4_without_models_or_network():
     assert tuple(config.baseline for config in list_baselines()) == tuple(Baseline)
     assert set(BASELINES) == set(Baseline)
     assert get_baseline("B0").capabilities == ()
     assert get_baseline("B1").capabilities == ("detection",)
     assert get_baseline("B2").capabilities == ("detection", "uniform_redaction")
 
-    full = get_baseline(Baseline.B3)
-    assert full.detection
-    assert full.context_aware_policy
-    assert full.safe_tool_gateway
-    assert full.memory_guard
-    assert full.disclosure_ledger
-    assert not full.uniform_redaction
-    assert BaselineConfig.from_dict(full.to_dict()) == full
-    assert json.loads(json.dumps(full.to_dict()))["baseline"] == "B3"
+    static = get_baseline(Baseline.B3)
+    assert static.detection
+    assert static.context_aware_policy
+    assert static.safe_tool_gateway
+    assert static.memory_guard
+    assert static.disclosure_ledger
+    assert not static.uniform_redaction
+    assert not static.dynamic_intent
+    assert not static.guarded_planning
+
+    dynamic = get_baseline(Baseline.B4)
+    assert dynamic.dynamic_intent
+    assert dynamic.guarded_planning
+    assert BaselineConfig.from_dict(dynamic.to_dict()) == dynamic
+    assert json.loads(json.dumps(dynamic.to_dict()))["baseline"] == "B4"
     with pytest.raises(KeyError):
-        get_baseline("B4")
+        get_baseline("B5")
 
 
 def test_all_metric_payloads_are_json_serializable():

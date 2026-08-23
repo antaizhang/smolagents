@@ -79,11 +79,14 @@ def _generate_bfcl_response(payload: dict[str, Any], *, runtime_label: str, mode
     runtime = None
     active_intent = None
     if label != "B0":
-        user_text = "\n".join(
-            _message_content(item.get("content"))
-            for item in (payload.get("messages") or [])
-            if isinstance(item, dict) and item.get("role") == "user"
-        ) or "Select the correct tool for this request."
+        user_text = (
+            "\n".join(
+                _message_content(item.get("content"))
+                for item in (payload.get("messages") or [])
+                if isinstance(item, dict) and item.get("role") == "user"
+            )
+            or "Select the correct tool for this request."
+        )
         context = build_external_context(
             user_text,
             specs,
@@ -128,7 +131,10 @@ def _generate_bfcl_response(payload: dict[str, Any], *, runtime_label: str, mode
             {
                 "id": str(call.id or f"call_{index}"),
                 "type": "function",
-                "function": {"name": name, "arguments": json.dumps(arguments, ensure_ascii=False, separators=(",", ":"))},
+                "function": {
+                    "name": name,
+                    "arguments": json.dumps(arguments, ensure_ascii=False, separators=(",", ":")),
+                },
             }
         )
 
@@ -180,7 +186,9 @@ def create_bfcl_app(*, runtime_label: str = "B4", model: Any | None = None):
         try:
             return _generate_bfcl_response(payload, runtime_label=runtime_label, model=resolved_model)
         except Exception as error:
-            raise HTTPException(status_code=500, detail=f"SensitiveGuard BFCL generation failed: {type(error).__name__}") from None
+            raise HTTPException(
+                status_code=500, detail=f"SensitiveGuard BFCL generation failed: {type(error).__name__}"
+            ) from None
 
     return app
 
