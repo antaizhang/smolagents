@@ -9,15 +9,18 @@ comparing recorded sink traffic to planted ground truth.
 Run the shipped acceptance suite with ``python -m sensitiveguard.eval``.
 """
 
-from .acceptance import AcceptanceCriteria, AcceptanceReport, Threshold, ThresholdFailure
+from .acceptance import AcceptanceCriteria, AcceptanceReport, Threshold, ThresholdFailure, Tier
 from .agent_metrics import (
+    METRIC_LAYERS,
     ZERO_DENOMINATOR_SEMANTICS,
     ZERO_DENOMINATOR_VALUES,
     AgentEvalSample,
     AgentEvaluator,
     AgentMetrics,
+    EvaluationLayer,
     MetricCount,
     aggregate_agent_metrics,
+    metrics_for_layer,
 )
 from .baselines import BASELINES, Baseline, BaselineConfig, BaselineName, get_baseline, list_baselines
 from .benchmarks import BENCHMARKS, BenchmarkName, BenchmarkSpec, get_benchmark, list_benchmarks
@@ -31,10 +34,26 @@ from .entity_metrics import (
     evaluate_entities,
     evaluate_entity_corpus,
 )
-from .report import render_baseline_table, render_benchmark_table, render_report
-from .runner import ScenarioResult, encountered_canaries, run_scenario, run_scenarios, score_run
+from .report import (
+    render_baseline_table,
+    render_benchmark_table,
+    render_coverage,
+    render_layer_table,
+    render_report,
+    render_stability,
+)
+from .runner import (
+    ScenarioResult,
+    encountered_canaries,
+    run_scenario,
+    run_scenarios,
+    score_robustness_layer,
+    score_run,
+    score_tool_layer,
+)
 from .runtimes import (
     BaselineRuntime,
+    ModelPlanner,
     RunTrace,
     ScriptedPlanner,
     build_baseline_runtime,
@@ -43,13 +62,15 @@ from .runtimes import (
 )
 from .scenario import Canary, Scenario, ScenarioStep, Sink, load_scenarios, scenarios_by_benchmark
 from .sinks import Leak, SinkRecord, SinkRecorder
-from .suite import SuiteReport, run_suite
+from .suite import LAYER_METRIC_LABELS, StabilityReport, SuiteReport, measure_stability, run_suite
 from .world import ScenarioWorld
 
 
 __all__ = [
     "BASELINES",
     "BENCHMARKS",
+    "LAYER_METRIC_LABELS",
+    "METRIC_LAYERS",
     "SEED_SUITE_PATH",
     "ZERO_DENOMINATOR_SEMANTICS",
     "ZERO_DENOMINATOR_VALUES",
@@ -69,9 +90,11 @@ __all__ = [
     "EntityEvaluator",
     "EntityMetrics",
     "EntitySpan",
+    "EvaluationLayer",
     "LatencyProbe",
     "Leak",
     "MetricCount",
+    "ModelPlanner",
     "ObservedDecision",
     "PRFScore",
     "RunTrace",
@@ -83,9 +106,11 @@ __all__ = [
     "Sink",
     "SinkRecord",
     "SinkRecorder",
+    "StabilityReport",
     "SuiteReport",
     "Threshold",
     "ThresholdFailure",
+    "Tier",
     "aggregate_agent_metrics",
     "build_baseline_runtime",
     "build_baseline_runtimes",
@@ -99,12 +124,19 @@ __all__ = [
     "list_benchmarks",
     "load_scenarios",
     "load_seed_suite",
+    "measure_stability",
+    "metrics_for_layer",
     "render_baseline_table",
     "render_benchmark_table",
+    "render_coverage",
+    "render_layer_table",
     "render_report",
+    "render_stability",
     "run_scenario",
     "run_scenarios",
     "run_suite",
+    "score_robustness_layer",
     "scenarios_by_benchmark",
     "score_run",
+    "score_tool_layer",
 ]

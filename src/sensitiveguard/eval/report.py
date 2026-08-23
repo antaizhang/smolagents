@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
+from .acceptance import Tier
+from .agent_metrics import EvaluationLayer
 from .baselines import get_baseline
-from .suite import PRIMARY_METRIC_ORDER, SuiteReport
+from .suite import LAYER_METRIC_LABELS, PRIMARY_METRIC_ORDER, StabilityReport, SuiteReport
 
 
 def _format_rate(value: float) -> str:
@@ -97,26 +99,124 @@ def render_acceptance(report: SuiteReport) -> str:
     return "\n".join(lines) if lines else "  no baseline was graded"
 
 
-def render_report(report: SuiteReport, *, include_evidence: bool = True) -> str:
+def render_layer_table(report: SuiteReport) -> str:
+    """One row per evaluation layer, for each graded baseline.
+
+    This is the view a release decision is actually made from: which layer is
+    weak, and whether the weakness blocks the build.
+    """
+
+    if not report.acceptance:
+        return "  no baseline was graded"
+    lines: list[str] = []
+    for baseline in sorted(report.acceptance, key=lambda item: item.value):
+        acceptance = report.acceptance[baseline]
+        metrics = report.overall[baseline]
+        by_layer = acceptance.failures_by_layer()
+        lines.append(f"### {baseline.value}")
+        lines.append("")
+        rows: list[list[str]] = []
+        for layer in EvaluationLayer:
+            if layer is EvaluationLayer.OPERATIONS:
+                values = f"p95_guard={metrics.p95_guard_latency_ms:.1f}ms tokens/task={metrics.tokens_per_task:.0f}"
+            else:
+                labels = LAYER_METRIC_LABELS.get(layer, ())
+                values = "  ".join(f"{label}={metrics.rates[name].value:.3f}" for name, label in labels)
+            failures = by_layer.get(layer, ())
+            blocking = [failure for failure in failures if failure.blocks_release]
+            if blocking:
+                verdict = "VETO" if any(failure.tier is Tier.P0 for failure in blocking) else "FAIL"
+            elif failures:
+                verdict = "PASS*"
+            elif not report.layer_is_graded(layer):
+                verdict = "not gated"
+            else:
+                verdict = "PASS"
+            rows.append([layer.value, verdict, values])
+        lines.append(_table(["Layer", "Verdict", "Metrics"], rows))
+        lines.append("")
+    lines.append("PASS* means an advisory (P2) threshold was missed without blocking the release.")
+    return "\n".join(lines)
+
+
+def render_coverage(report: SuiteReport) -> str:
+    """How much evidence sits behind each verdict."""
+
+    coverage = report.scenario_coverage()
+    lines = [
+        f"  scenarios: {coverage['scenarios']}",
+        f"  long-horizon scenarios: {coverage['long_horizon']}",
+        f"  scenarios that hit a refusal or failure with a declared recovery: {coverage['recovery']}",
+        f"  attack scenarios: {coverage['attack']}",
+        f"  graded policy decisions: {coverage['graded_policy_decisions']}",
+        f"  declared argument checks: {coverage['argument_checks']}",
+    ]
+    empty = [name for name in ("long_horizon", "recovery", "attack") if not coverage[name]]
+    if empty:
+        lines.append(f"  WARNING: no scenarios behind {', '.join(empty)}; those layers pass vacuously")
+    return "\n".join(lines)
+
+
+def render_stability(stability: StabilityReport) -> str:
+    lines = [f"  {stability.repeats} repeats of {stability.baseline.value}"]
+    widest = stability.widest()
+    if not widest:
+        lines.append("  every metric was identical across runs")
+        return "\n".join(lines)
+    for name, spread in widest:
+        low, high = stability.spans[name]
+        lines.append(f"  {name}: {low:.4f} .. {high:.4f} (spread {spread:.4f})")
+    return "\n".join(lines)
+
+
+def render_report(
+    report: SuiteReport,
+    *,
+    include_evidence: bool = True,
+    stability: StabilityReport | None = None,
+) -> str:
     scenario_count = len({result.scenario_id for result in report.results})
     sections = [
         "# SensitiveGuard acceptance report",
         "",
         f"Scenarios: {scenario_count}    Runs: {len(report.results)}    "
-        f"Verdict: {'PASS' if report.passed else 'FAIL'}",
-        "",
-        "## Baseline comparison",
-        "",
-        render_baseline_table(report),
-        "",
-        "## Per-benchmark primary metric",
-        "",
-        render_benchmark_table(report),
-        "",
-        "## Acceptance",
-        "",
-        render_acceptance(report),
+        f"Planner: {report.planner_mode}    Verdict: {'PASS' if report.passed else 'FAIL'}",
     ]
+    if report.planner_is_scripted:
+        sections.extend(
+            [
+                "",
+                "> Planner is scripted, so the tool and robustness layers describe the dataset's",
+                "> plans rather than an agent's choices. They are reported but not gated. Re-run",
+                "> with --model to grade them against a real planner.",
+            ]
+        )
+    sections.extend(
+        [
+            "",
+            "## Layer verdicts",
+            "",
+            render_layer_table(report),
+            "",
+            "## Baseline comparison",
+            "",
+            render_baseline_table(report),
+            "",
+            "## Per-benchmark primary metric",
+            "",
+            render_benchmark_table(report),
+            "",
+            "## Coverage",
+            "",
+            render_coverage(report),
+            "",
+            "## Acceptance",
+            "",
+            render_acceptance(report),
+        ]
+    )
+    if stability is not None:
+        sections.extend(["", "## Stability", "", render_stability(stability)])
     if include_evidence:
         sections.extend(["", "## Leak evidence", "", render_leak_evidence(report)])
     return "\n".join(sections)
@@ -126,6 +226,9 @@ __all__ = [
     "render_acceptance",
     "render_baseline_table",
     "render_benchmark_table",
+    "render_coverage",
+    "render_layer_table",
     "render_leak_evidence",
     "render_report",
+    "render_stability",
 ]
