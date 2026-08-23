@@ -27,7 +27,6 @@ from .eval import (
     PRFScore,
 )
 from .factory import SensitiveGuardRuntime, create_sensitive_agent
-from .llm import build_ollama_model
 from .intent import (
     ActionRequest,
     Effect,
@@ -48,6 +47,7 @@ from .lineage import (
     LineageTracker,
     OperationStatus,
 )
+from .llm import build_ollama_model
 from .mcp import MCPGateway, MCPSchemaValidator, TrustStore
 from .memory import MemoryGuard, SanitizedMemoryStore
 from .models import (

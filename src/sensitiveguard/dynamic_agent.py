@@ -12,7 +12,7 @@ from sensitiveguard.intent import IntentOperation, IntentSpec
 from sensitiveguard.intent.resolver import _CAPABILITIES_BY_OPERATION, _EFFECTS_BY_OPERATION
 from sensitiveguard.models import GuardStage
 from smolagents.agents import ToolCallingAgent, populate_template
-from smolagents.memory import FinalAnswerStep, PlanningStep
+from smolagents.memory import PlanningStep
 from smolagents.models import ChatMessage, MessageRole
 from smolagents.monitoring import LogLevel, Timing
 from smolagents.utils import AgentGenerationError
@@ -82,9 +82,15 @@ def resolve_request_intent(
         )
     )
 
+    # Capabilities and effects are per-operation grants: a child may only carry a
+    # capability or effect that is justified by an operation which actually
+    # survived the intersection with the host ceiling. Deriving these from the
+    # full requested set would let an unauthorized operation (e.g. SEND/WRITE
+    # inferred from "upload"/"copy") smuggle in a capability that merely happens
+    # to also live in the host ceiling, silently expanding host authority.
     requested_capabilities: set[str] = set()
     requested_effects: set[Any] = set()
-    for operation in requested_operations:
+    for operation in effective_operations:
         requested_capabilities.update(_CAPABILITIES_BY_OPERATION[operation])
         requested_effects.update(_EFFECTS_BY_OPERATION[operation])
 
@@ -92,12 +98,10 @@ def resolve_request_intent(
     # manifests. A model cannot invent a capability-operation binding here.
     for capability, operation_value in (capability_operations or {}).items():
         operation = _manifest_operation(operation_value)
-        if operation is not None and operation in requested_operations:
+        if operation is not None and operation in effective_operations:
             requested_capabilities.add(str(capability).strip().casefold())
 
-    effective_capabilities = tuple(
-        sorted(set(host_intent.allowed_capabilities) & requested_capabilities)
-    )
+    effective_capabilities = tuple(sorted(set(host_intent.allowed_capabilities) & requested_capabilities))
     effective_effects = tuple(
         sorted(
             set(host_intent.allowed_effects) & requested_effects,
@@ -128,9 +132,7 @@ class DynamicSensitiveToolCallingAgent(SensitiveToolCallingAgent):
 
     def __init__(self, *, planning_interval: int | None = 1, **kwargs: Any) -> None:
         if planning_interval is not None and (
-            isinstance(planning_interval, bool)
-            or not isinstance(planning_interval, int)
-            or planning_interval < 1
+            isinstance(planning_interval, bool) or not isinstance(planning_interval, int) or planning_interval < 1
         ):
             raise ValueError("planning_interval must be a positive integer or None")
 
@@ -318,9 +320,7 @@ class DynamicSensitiveToolCallingAgent(SensitiveToolCallingAgent):
             record_disclosure=False,
         )
         safe_plan_content = (
-            guarded_plan.content
-            if guarded_plan.allowed
-            else "[Planning output withheld by privacy policy]"
+            guarded_plan.content if guarded_plan.allowed else "[Planning output withheld by privacy policy]"
         )
 
         if is_first_step:

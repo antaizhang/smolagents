@@ -24,6 +24,7 @@ from __future__ import annotations
 import os
 from typing import Any
 
+
 # Defaults match the target deployment: Ollama on port 11436 serving qwen3.5:9b.
 DEFAULT_MODEL_ID = "qwen3.5:9b"
 DEFAULT_API_BASE = "http://127.0.0.1:11436"
