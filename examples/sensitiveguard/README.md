@@ -234,6 +234,8 @@ PYTHONPATH=src python -m sensitiveguard.eval \
   --api-base "$SG_OLLAMA_API_BASE" \
   --json "$REPORT_ROOT/internal/qwen35-b4-tool-smoke.json"
 ~~~
+https://chatgpt.com/c/6a8abc7b-afd4-83ee-a7cf-a62db457d774
+
 
 再做 B0/B4 正式对照：
 
