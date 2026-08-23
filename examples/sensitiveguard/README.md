@@ -206,7 +206,25 @@ PYTHONPATH=src python -m sensitiveguard.eval \
 ### 3.4 用真实 Ollama 模型评测 Agent
 
 先跑一个 B4 场景子集，确认模型能正确生成工具调用：
+export LITELLM_LOCAL_MODEL_COST_MAP=True
+export NO_PROXY=127.0.0.1,localhost
+export no_proxy=127.0.0.1,localhost
 
+curl --noproxy '*' http://127.0.0.1:11436/api/tags
+python - <<'PY'
+from litellm import completion
+
+print("START")
+
+r = completion(
+    model="ollama/qwen3.5:9b",
+    api_base="http://127.0.0.1:11436",
+    messages=[{"role": "user", "content": "Reply only OK"}],
+    temperature=0,
+)
+
+print("RESULT:", r.choices[0].message.content)
+PY
 ~~~bash
 PYTHONPATH=src python -m sensitiveguard.eval \
   --baseline B4 \
