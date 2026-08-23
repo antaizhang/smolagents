@@ -293,6 +293,8 @@ PYTHONPATH=src python -m sensitiveguard.eval \
   --json "$REPORT_ROOT/internal/custom-b0-vs-b4.json"
 ~~~
 
+https://chatgpt.com/c/6a8ae5c2-8bd0-83e8-b02e-3174d39bd9ff
+
 确认 oracle、必要字段和成功标记正确后，移除 **--no-gate** 接入 CI。
 
 ## 4. 外部 benchmark 的共用流程
