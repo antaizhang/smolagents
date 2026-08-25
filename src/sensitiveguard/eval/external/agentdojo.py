@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -172,29 +173,57 @@ def run_agentdojo(
     injection_tasks: list[str] | None = None,
     logdir: Path | None = None,
     force_rerun: bool = False,
+    attacked_model_name: str = "Local model",
 ) -> dict[str, Any]:
     """Execute AgentDojo and return its native utility/security results."""
 
     try:
         from agentdojo.attacks import load_attack
-        from agentdojo.benchmark import benchmark_suite_with_injections
+        from agentdojo.benchmark import benchmark_suite_with_injections, benchmark_suite_without_injections
+        from agentdojo.logging import OutputLogger
+        from agentdojo.models import MODEL_NAMES
         from agentdojo.task_suite.load_suites import get_suite
     except ImportError as error:
         raise RuntimeError("AgentDojo integration requires `pip install agentdojo==0.1.35`") from error
 
     suite = get_suite(benchmark_version, suite_name)
     pipeline = build_agentdojo_pipeline(model, runtime_label=runtime_label)
-    attack = load_attack(attack_name, suite, pipeline)
-    result = benchmark_suite_with_injections(
-        pipeline,
-        suite,
-        attack,
-        logdir=logdir,
-        force_rerun=force_rerun,
-        user_tasks=user_tasks,
-        injection_tasks=injection_tasks,
-        benchmark_version=benchmark_version,
-    )
+
+    # ImportantInstructions / ToolKnowledge 攻击会拿 pipeline.name 去 MODEL_NAMES 里做子串匹配，
+    # 取出注入文本中 {model} 占位符的值。自定义 pipeline 名不在表里，所以先登记一次。
+    # MODEL_NAMES 是模块级 dict，base_attacks 和 important_instructions_attacks 绑定的是同一个对象，
+    # 原地修改对两边都生效，且不改动 pipeline.name，日志目录和断点续跑不受影响。
+    MODEL_NAMES.setdefault("smolagents-sensitiveguard", attacked_model_name)
+
+    # AgentDojo 的 TraceLogger 从当前 logger 上下文里取 logdir 决定轨迹落盘位置。
+    # 官方 CLI 用 OutputLogger 建立这个上下文；直接调 benchmark 时必须自己建，
+    # 否则 Logger.get() 返回未初始化的 NullLogger，取 .logdir 会 AttributeError。
+    # 这里传的路径必须与下方 logdir= 一致，否则轨迹写到一处、断点续跑的检查读另一处。
+    with OutputLogger(str(logdir) if logdir is not None else None):
+        if attack_name in (None, "none"):
+            # 无攻击基线：报表里"无攻击 utility"那一列，用于衡量 B3/B4 的防护代价。
+            # 轨迹落在 logdir/pipeline/suite/<user_task>/none/none.json，与受攻击的跑法不冲突。
+            result = benchmark_suite_without_injections(
+                pipeline,
+                suite,
+                logdir=logdir,
+                force_rerun=force_rerun,
+                user_tasks=user_tasks,
+                benchmark_version=benchmark_version,
+            )
+        else:
+            attack = load_attack(attack_name, suite, pipeline)
+            result = benchmark_suite_with_injections(
+                pipeline,
+                suite,
+                attack,
+                logdir=logdir,
+                force_rerun=force_rerun,
+                user_tasks=user_tasks,
+                injection_tasks=injection_tasks,
+                benchmark_version=benchmark_version,
+            )
+
     return _serialize_native(dict(result))
 
 
@@ -202,29 +231,75 @@ def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(prog="python -m sensitiveguard.eval.external.agentdojo")
     parser.add_argument("--runtime", choices=("B0", "B3", "B4"), default="B4")
     parser.add_argument("--suite", default="workspace")
-    parser.add_argument("--attack", default="tool_knowledge")
+    parser.add_argument(
+        "--attack",
+        default="tool_knowledge",
+        help="AgentDojo 攻击名；传 none 则跑无攻击基线（只出 utility）",
+    )
     parser.add_argument("--benchmark-version", default="v1.2.2")
     parser.add_argument("--user-task", action="append")
     parser.add_argument("--injection-task", action="append")
     parser.add_argument("--logdir", type=Path, default=Path("reports/agentdojo"))
     parser.add_argument("--output", type=Path, default=Path("reports/agentdojo-result.json"))
+    parser.add_argument(
+        "--attacked-model-name",
+        default="Local model",
+        help="注入文本中 {model} 占位符的取值，默认与 AgentDojo 官方本地模型一档一致",
+    )
+    parser.add_argument(
+        "--think",
+        action="store_true",
+        help="开启模型自带推理模式，默认关闭以保证 B0/B3/B4 对比干净",
+    )
     return parser.parse_args()
 
 
 def main() -> int:
     args = _parse_args()
+
+    # 固定采样：ollama 默认 temperature 0.8 会让 B0/B3/B4 之间的差异被噪声淹没。
+    # think 默认关闭：模型自带的推理会与 B4 的 planning 重叠，并显著拉长耗时。
+    model_kwargs: dict[str, Any] = {"temperature": 0.0, "think": args.think}
+
     native = run_agentdojo(
         runtime_label=args.runtime,
-        model=build_ollama_model(),
+        model=build_ollama_model(**model_kwargs),
         suite_name=args.suite,
         attack_name=args.attack,
         benchmark_version=args.benchmark_version,
         user_tasks=args.user_task,
         injection_tasks=args.injection_task,
         logdir=args.logdir,
+        attacked_model_name=args.attacked_model_name,
     )
+
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(native, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+    # 把解析后的实验条件写一份 sidecar，避免几十小时后对不上当时的参数。
+    config_path = args.output.parent / (args.output.stem + ".config.json")
+    config_path.write_text(
+        json.dumps(
+            {
+                "runtime": args.runtime,
+                "suite": args.suite,
+                "attack": args.attack,
+                "benchmark_version": args.benchmark_version,
+                "attacked_model_name": args.attacked_model_name,
+                "user_tasks": args.user_task,
+                "injection_tasks": args.injection_task,
+                "model_kwargs": model_kwargs,
+                "sg_ollama_model": os.environ.get("SG_OLLAMA_MODEL"),
+                "sg_ollama_api_base": os.environ.get("SG_OLLAMA_API_BASE"),
+                "sg_ollama_num_ctx": os.environ.get("SG_OLLAMA_NUM_CTX"),
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
     print(json.dumps(native, ensure_ascii=False, indent=2))
     return 0
 
