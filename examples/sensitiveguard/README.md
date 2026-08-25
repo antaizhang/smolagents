@@ -421,17 +421,26 @@ PYTHONPATH=src python -m sensitiveguard.eval.external.agentdojo \
 ### 5.3 完整 B0/B3/B4
 
 ~~~bash
-for runtime in B0 B3 B4
-do
-  for suite in banking slack travel workspace
-  do
+#!/usr/bin/env bash
+set -euo pipefail
+
+: "${REPORT_ROOT:?REPORT_ROOT 未设置}"
+export SG_OLLAMA_NUM_CTX=32768
+export SG_OLLAMA_API_BASE=http://127.0.0.1:11436
+export SG_OLLAMA_MODEL=qwen3.5:9b
+
+for runtime in B0 B3 B4; do
+  for suite in banking slack travel workspace; do
+    out_dir="$REPORT_ROOT/agentdojo/v1.2.2/qwen35/$runtime"
+    mkdir -p "$out_dir"
+    echo "=== $runtime / $suite  $(date '+%F %T') ==="
     PYTHONPATH=src python -m sensitiveguard.eval.external.agentdojo \
       --runtime "$runtime" \
       --suite "$suite" \
       --attack tool_knowledge \
       --benchmark-version v1.2.2 \
-      --logdir "$REPORT_ROOT/agentdojo/v1.2.2/qwen35/$runtime/$suite-log" \
-      --output "$REPORT_ROOT/agentdojo/v1.2.2/qwen35/$runtime/$suite-native.json"
+      --logdir "$out_dir/$suite-log" \
+      --output "$out_dir/$suite-native.json"
   done
 done
 ~~~
