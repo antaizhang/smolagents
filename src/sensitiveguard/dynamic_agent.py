@@ -308,8 +308,10 @@ class DynamicSensitiveToolCallingAgent(SensitiveToolCallingAgent):
 
         try:
             plan_message = self.model.generate(input_messages, stop_sequences=["<end_plan>"])
-        except Exception:
-            raise AgentGenerationError("Protected planning generation failed.", self.logger) from None
+        except Exception as e:
+            raise AgentGenerationError(
+                f"Protected planning generation failed: {type(e).__name__}: {e}", self.logger
+            ) from e
 
         guarded_plan = self.gateway.guard_payload(
             plan_message.content or "",
