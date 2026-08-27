@@ -2,8 +2,8 @@
 
 ## Current State
 
-**Last Updated:** 2026-08-23
-**Active Feature:** None — the evaluation/acceptance feature now has a complete operator runbook.
+**Last Updated:** 2026-08-27
+**Active Feature:** None — the external single-case B0-B4 walkthrough is complete and verified.
 
 ## Status
 
@@ -22,6 +22,8 @@
 - [x] Repaired stale `main` lint/format issues and updated the baseline catalog test for B4.
 - [x] Replaced `examples/sensitiveguard/README.md` with a detailed Chinese evaluation manual covering the built-in gate, real-model and custom-data runs, plus AgentDojo, AgentThreatBench, PrivacyLens, AgentDAM, BFCL, and tau3.
 - [x] Documented which external component is replaced by each bridge, where the authoritative scorer runs, how native results are normalized, and which integrations remain constrained or unverified.
+- [x] Pinned one public sample each from AgentDojo, PrivacyLens, BFCL, and tau3 and added a deterministic walkthrough that replays the same raw candidate through B0-B4.
+- [x] Added observable sample/oracle, plan, intent, proposed and executed tool arguments, memory, guard decision, final-output, and transparent local-score events with interactive pause and JSON export modes.
 
 ### What's In Progress
 
@@ -47,6 +49,8 @@
 - **Combine both sides of the runtime conflict**: retain dynamic intent and guarded planning from `main`, plus the runtime branch's five evaluation layers and model-planner metrics.
 - **Keep official external scorers authoritative**: `sensitiveguard.eval.external` only normalizes their numeric outputs; bridge startup or normalized JSON alone is not evidence that a benchmark completed.
 - **Disclose adapter coverage, not just commands**: the runbook calls out PrivacyLens/AgentDAM B3-B4 equivalence, BFCL endpoint/history limitations, and tau3's text-only utility focus.
+- **Separate the teaching walkthrough from official benchmark claims**: the four single-case scorers are deterministic, transparent diagnostics (`official: false`); upstream harnesses and scorers remain authoritative.
+- **Replay an identical raw proposal across B0-B4**: baseline differences are applied only after proposal capture, making detection, redaction, intent narrowing, memory visibility, and execution decisions directly comparable.
 
 ## Files Modified This Session
 
@@ -56,13 +60,19 @@
 - External benchmark files received formatting/import cleanup required by the harness gate.
 - `tests/sensitiveguard/test_evaluation.py` now validates the shipped B4 baseline.
 - `examples/sensitiveguard/README.md` is now the detailed evaluation runbook.
+- `examples/sensitiveguard/external_eval_cases/` contains the four pinned fixtures and a step-by-step Chinese guide.
+- `examples/sensitiveguard/run_external_eval_walkthrough.py` provides interactive and JSON walkthrough output.
+- `src/sensitiveguard/eval/external/walkthrough.py` implements deterministic B0-B4 replay and transparent scoring; the external AgentDojo bridge and metric normalization were corrected alongside it.
+- `tests/sensitiveguard/test_external_eval_walkthrough.py` covers the four samples and all 20 sample/baseline combinations.
 - `feature_list.json`, `progress.md`, and `session-handoff.md` record the documentation and verification evidence.
 
 ## Evidence of Completion
 
-- [x] Tests pass: `python -m pytest tests/sensitiveguard -q` → `310 passed`.
+- [x] Tests pass: `python -m pytest tests/sensitiveguard -q` → `327 passed`.
 - [x] Quality clean: `ruff check src/sensitiveguard tests/sensitiveguard` → `All checks passed!`; `ruff format --check ...` → clean.
 - [x] Full harness: `./init.sh` → "Verification Complete (baseline is GREEN)".
+- [x] Walkthrough-focused tests: `pytest tests/sensitiveguard/test_external_eval_walkthrough.py tests/sensitiveguard/test_external_eval_adapters.py` → `20 passed`.
+- [x] Walkthrough CLI smoke: BFCL B0 JSON output contains all observable event kinds and reports a non-official exact-match diagnostic.
 - [x] Acceptance: `PYTHONPATH=src python -m sensitiveguard.eval` → B4 `PASS` across 30 scenarios / 150 runs.
 - [x] External adapter unit tests: `pytest tests/sensitiveguard/test_external_eval_adapters.py` → 3 passed.
 - [x] External CLI inventory: `python -m sensitiveguard.eval.external --list` → all six adapters registered.

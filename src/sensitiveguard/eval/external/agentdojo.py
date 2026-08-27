@@ -31,7 +31,17 @@ from .tools import (
 
 
 def _recipient_argument(inputs: dict[str, Any]) -> str | None:
-    for candidate in ("recipient", "to", "email", "email_address", "user", "user_id", "channel", "channel_id"):
+    for candidate in (
+        "recipient",
+        "recipients",
+        "to",
+        "email",
+        "email_address",
+        "user",
+        "user_id",
+        "channel",
+        "channel_id",
+    ):
         if candidate in inputs:
             return candidate
     return None
@@ -56,12 +66,54 @@ def _serialize_native(value: Any) -> Any:
     return str(value)
 
 
+def _build_agent_trace(agent: Any, recorder: ExternalCallRecorder, *, runtime_label: str, query: Any, answer: Any):
+    """Build a small serializable trace for examples without replacing AgentDojo's native log."""
+
+    steps = []
+    proposed_calls = []
+    for step in getattr(getattr(agent, "memory", None), "steps", ()):
+        calls = []
+        for call in getattr(step, "tool_calls", None) or ():
+            serialized = {
+                "name": str(getattr(call, "name", "")),
+                "arguments": _serialize_native(getattr(call, "arguments", None) or {}),
+                "id": str(getattr(call, "id", "") or ""),
+            }
+            calls.append(serialized)
+            proposed_calls.append(serialized)
+        steps.append(
+            {
+                "type": type(step).__name__,
+                "plan": _serialize_native(getattr(step, "plan", None)),
+                "model_output": _serialize_native(getattr(step, "model_output", None)),
+                "tool_calls": calls,
+                "observations": _serialize_native(getattr(step, "observations", None)),
+                "action_output": _serialize_native(getattr(step, "action_output", None)),
+                "error": _serialize_native(getattr(step, "error", None)),
+            }
+        )
+
+    host_intent = getattr(agent, "host_intent", None)
+    active_intent = getattr(agent, "active_intent", None)
+    return {
+        "runtime": runtime_label,
+        "query": str(query),
+        "host_intent": _serialize_native(host_intent.to_dict()) if host_intent is not None else None,
+        "active_intent": _serialize_native(active_intent.to_dict()) if active_intent is not None else None,
+        "steps": steps,
+        "proposed_calls": proposed_calls,
+        "executed_calls": _serialize_native(recorder.calls),
+        "final_answer": _serialize_native(answer),
+    }
+
+
 def build_agentdojo_pipeline(model: Any, *, runtime_label: str = "B4", model_destination: str = "local"):
     """Return an AgentDojo BasePipelineElement backed by smolagents/SensitiveGuard."""
 
     try:
         from agentdojo.agent_pipeline.base_pipeline_element import BasePipelineElement
         from agentdojo.functions_runtime import FunctionCall
+        from agentdojo.logging import Logger
         from agentdojo.types import text_content_block_from_string
     except ImportError as error:
         raise RuntimeError("AgentDojo integration requires `pip install agentdojo==0.1.35`") from error
@@ -72,6 +124,7 @@ def build_agentdojo_pipeline(model: Any, *, runtime_label: str = "B4", model_des
 
     class SensitiveGuardAgentDojoPipeline(BasePipelineElement):
         name = f"smolagents-sensitiveguard-{label.lower()}"
+        last_trace: dict[str, Any] | None = None
 
         def query(self, query, runtime, env, messages=(), extra_args=None):
             del messages
@@ -157,6 +210,8 @@ def build_agentdojo_pipeline(model: Any, *, runtime_label: str = "B4", model_des
             metadata = dict(extra_args or {})
             metadata["sensitiveguard_runtime"] = label
             metadata["sensitiveguard_executed_calls"] = recorder.calls
+            self.last_trace = _build_agent_trace(agent, recorder, runtime_label=label, query=query, answer=answer)
+            Logger.get().log(native_messages)
             return str(answer), runtime, env, native_messages, metadata
 
     return SensitiveGuardAgentDojoPipeline()

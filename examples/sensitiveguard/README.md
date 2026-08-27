@@ -11,6 +11,7 @@
 - [离线演示](offline_demo.py)
 - [HTTP 演示服务](demo_server/README.md)
 - [敏感数据检测拆解](detection/README.md)
+- [四个外部评测单样本的 B0–B4 逐步回放](external_eval_cases/README.md)
 
 ## 1. 先理解评测边界
 
@@ -24,8 +25,9 @@
 | B3 | 完整静态 SensitiveGuard | 测上下文策略、工具网关、内存保护和披露账本 |
 | B4 | B3 + 动态请求意图收窄 + 受保护规划 | 正式发布门禁和推荐生产基线 |
 
-本仓库内置套件支持 B0–B4。外部桥接器只支持 B0、B3、B4，因为它们测的是
-“无保护、静态完整保护、动态完整保护”三种 Agent 运行形态。
+本仓库内置套件支持 B0–B4。正式外部桥接器只支持 B0、B3、B4，因为它们测的是
+“无保护、静态完整保护、动态完整保护”三种 Agent 运行形态。为了让五级差异都能逐步
+观察，四条固定外部样本另有一个离线教学 runner，支持完整 B0–B4；它不替代官方 harness。
 
 ### 1.2 五层指标
 
@@ -302,6 +304,25 @@ PYTHONPATH=src python -m sensitiveguard.eval \
 
 ## 4. 外部 benchmark 的共用流程
 
+### 4.1 先用四条固定样本看懂 B0–B4
+
+AgentDojo、PrivacyLens、BFCL 和 τ³ 各固定了一条官方公开样本。下面的命令使用同一条
+确定性候选轨迹依次回放五个 baseline，并展开 plan、原始工具提议、检测/转换、实际执行、
+策略审计、最终输出和透明本地评分：
+
+~~~bash
+cd "$SG_REPO"
+PYTHONPATH=src python examples/sensitiveguard/run_external_eval_walkthrough.py \
+  --benchmark agentdojo \
+  --pause
+~~~
+
+`--benchmark` 还可选 `privacylens`、`bfcl`、`tau3` 或 `all`；`--baseline` 可重复传入。
+样本来源、逐条命令、输出解释和官方 scorer 边界见
+[固定单样本逐步观察指南](external_eval_cases/README.md)。
+
+### 4.2 正式外部评测流程
+
 列出已注册适配器：
 
 ~~~bash
@@ -332,7 +353,7 @@ PYTHONPATH=src python -m sensitiveguard.eval.external \
 normalizer **不会运行 benchmark，也不会重新评分**。它只把官方结果整理成统一字段。
 官方原生 scorer 始终是权威来源。
 
-### 4.1 当前桥接成熟度
+### 4.3 当前桥接成熟度
 
 | Benchmark | 本仓库替换的部分 | 官方保留的部分 | 重要限制 |
 | --- | --- | --- | --- |
@@ -343,7 +364,7 @@ normalizer **不会运行 benchmark，也不会重新评分**。它只把官方�
 | BFCL | OpenAI chat-completions 模型端点 | 数据、工具执行、官方 scorer | 不支持 completions 端点；复杂多轮能力有限 |
 | τ³ | 文本 half-duplex agent | 用户模拟、工具环境、reward | 不支持 audio-native；主要测 utility |
 
-### 4.2 公平对比规则
+### 4.4 公平对比规则
 
 B0/B3/B4 之间只改变 runtime，其他条件必须完全一致：
 
@@ -453,9 +474,10 @@ AgentDojo 会复用同一 logdir 的历史轨迹。更换模型、runtime、版�
 官方 scorer 已在桥接运行过程中执行，没有第二条离线 scorer 命令。原生 JSON 中：
 
 - utility_results：攻击存在时合法用户任务是否完成；
-- security_results：攻击目标是否被阻止；
+- security_results：AgentDojo 原生命名，值为 true 表示攻击目标已成功执行；
 - injection_tasks_utility_results：攻击目标本身是否具备可执行性；
-- attack success rate = 1 - mean(security_results)。
+- attack success rate = mean(security_results)；
+- security score = 1 - attack success rate。
 
 归一化单个 suite：
 

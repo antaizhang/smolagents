@@ -88,6 +88,14 @@
       "dependencies": ["feat-001"],
       "status": "not-started",
       "evidence": ""
+    },
+    {
+      "id": "feat-012",
+      "name": "External benchmark single-case B0-B4 walkthrough",
+      "description": "Pin one public AgentDojo, PrivacyLens, BFCL, and tau3 sample and replay the identical raw candidate through B0-B4 with observable tool, detection, transformation, intent, memory, audit, and transparent local-score events.",
+      "dependencies": ["feat-010"],
+      "status": "done",
+      "evidence": "Four pinned fixtures plus a deterministic B0-B4 walkthrough CLI and transparent local scorers are covered by tests/sensitiveguard/test_external_eval_walkthrough.py. Focused tests: 20 passed; BFCL JSON CLI smoke passed; ./init.sh: ruff/format/compileall clean and 327 passed (2026-08-27)."
     }
   ]
 }

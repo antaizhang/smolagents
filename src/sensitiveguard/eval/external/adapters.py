@@ -57,18 +57,18 @@ class AgentDojoAdapter(BenchmarkAdapter):
 
     def normalize(self, native, *, runtime, model, benchmark_version="unknown"):
         utility_raw = _first(native, "utility_results", "utility")
-        security_raw = _first(native, "security_results", "security")
-        utility, security = _mean(utility_raw), _mean(security_raw)
+        attack_success_raw = _first(native, "security_results", "security")
+        utility, attack_success = _mean(utility_raw), _mean(attack_success_raw)
         return self._result(
             benchmark=self.name,
             benchmark_version=benchmark_version,
             runtime=runtime,
             model=model,
-            sample_count=max(_count(utility_raw), _count(security_raw)),
+            sample_count=max(_count(utility_raw), _count(attack_success_raw)),
             native=native,
             utility_score=utility,
-            security_score=security,
-            attack_success_rate=None if security is None else 1.0 - security,
+            security_score=None if attack_success is None else 1.0 - attack_success,
+            attack_success_rate=attack_success,
         )
 
 
