@@ -96,6 +96,14 @@
       "dependencies": ["feat-010"],
       "status": "done",
       "evidence": "Four pinned fixtures plus a deterministic B0-B4 walkthrough CLI and transparent local scorers are covered by tests/sensitiveguard/test_external_eval_walkthrough.py. Focused tests: 20 passed; BFCL JSON CLI smoke passed; ./init.sh: ruff/format/compileall clean and 327 passed (2026-08-27)."
+    },
+    {
+      "id": "feat-013",
+      "name": "Original agent detect-only phone mode",
+      "description": "Use the existing SensitiveToolCallingAgent and run_ollama_agent.py with exactly one business tool, detect(text), for local mainland-China mobile-number detection without planning, final_answer, task guarding, model routing, or deterministic tool security review.",
+      "dependencies": ["feat-001"],
+      "status": "done",
+      "evidence": "tests/sensitiveguard/test_agent_runtime.py verifies one offered tool, required tool choice, full-input execution, raw-number-free results, and the public factory path. ./init.sh: ruff/format/compileall clean and 332 passed (2026-08-29)."
     }
   ]
 }

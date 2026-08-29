@@ -16,7 +16,7 @@ from smolagents.agents import ActionOutput, ToolCallingAgent, ToolOutput
 from smolagents.memory import ActionStep, FinalAnswerStep, ToolCall
 from smolagents.models import ChatMessage, MessageRole, parse_json_if_needed
 from smolagents.monitoring import LogLevel, Timing
-from smolagents.tools import validate_tool_arguments
+from smolagents.tools import Tool, tool, validate_tool_arguments
 from smolagents.utils import (
     AgentExecutionError,
     AgentGenerationError,
@@ -30,6 +30,45 @@ from .prompts import SENSITIVEGUARD_INSTRUCTIONS
 
 
 _SAFE_TOOL_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,79}$")
+_MAINLAND_MOBILE_PATTERN = re.compile(r"(?<!\d)(?:(?:\+?86|0086)[ -]?)?1[3-9]\d(?:[ -]?\d){8}(?!\d)")
+
+_DETECT_PROMPT_TEMPLATES = {
+    "system_prompt": """
+You are a phone-number detection agent.
+
+Call the provided `detect` tool exactly once. Pass the complete user input in
+the `text` argument without rewriting, shortening, masking, or summarizing it.
+The tool result is the final answer; do not call any other tool.
+
+Available tool:
+{%- for tool in tools.values() %}
+- {{ tool.to_tool_calling_prompt() }}
+{%- endfor %}
+""".strip(),
+    "planning": {
+        "initial_plan": "",
+        "update_plan_pre_messages": "",
+        "update_plan_post_messages": "",
+    },
+    "managed_agent": {"task": "", "report": ""},
+    "final_answer": {"pre_messages": "", "post_messages": ""},
+}
+
+
+@tool
+def detect(text: str) -> dict[str, Any]:
+    """Check whether the complete input contains a mainland China mobile number.
+
+    Args:
+        text: Complete user input to inspect.
+
+    Returns:
+        A result containing only the boolean decision and match count. Raw
+        phone numbers are never returned.
+    """
+
+    count = sum(1 for _ in _MAINLAND_MOBILE_PATTERN.finditer(text))
+    return {"has_phone": count > 0, "count": count}
 
 
 class _AgentMemoryGuard(MemoryGuard):
@@ -47,28 +86,62 @@ class _AgentMemoryGuard(MemoryGuard):
 
 
 class SensitiveToolCallingAgent(ToolCallingAgent):
-    """ToolCallingAgent with pre-log task, call, observation and answer guards.
+    """Existing Agent class with a local one-tool mode and a legacy guarded mode.
 
-    Model token streaming and unmanaged sub-agents are deliberately disabled:
-    partial tokens and raw handoffs cannot be reliably classified before they
-    become observable. The outer ``run(stream=True)`` API remains supported and
-    yields only sanitized events.
+    ``detect_only=True`` exposes only :data:`detect`; its tool result directly
+    ends the run. Explicit construction through ``SensitiveGuardRuntime`` keeps
+    the older guarded-tool behavior for compatibility with the security suite.
     """
 
     def __init__(
         self,
         *,
         model: Any,
-        tools: list[SensitiveGuardTool],
-        gateway: Any,
-        privacy_context: Any,
+        tools: list[SensitiveGuardTool] | None = None,
+        gateway: Any = None,
+        privacy_context: Any = None,
         model_destination: str = "external_llm",
         model_endpoint_id: str | None = None,
         intent_resolver: Any | None = None,
         security_reviewer: Any | None = None,
         instructions: str | None = None,
+        detect_only: bool = False,
         **kwargs: Any,
     ) -> None:
+        self._detect_only = detect_only
+        self._detect_input = ""
+        if detect_only:
+            kwargs.pop("stream_outputs", None)
+            kwargs.pop("managed_agents", None)
+            kwargs.pop("planning_interval", None)
+            kwargs.pop("add_base_tools", None)
+            kwargs.pop("max_tool_threads", None)
+            kwargs.pop("step_callbacks", None)
+            kwargs.pop("max_steps", None)
+            self.gateway = None
+            self.privacy_context = privacy_context
+            self.model_destination = "local"
+            self.model_endpoint_id = None
+            self.intent_resolver = None
+            self.security_reviewer = None
+            self._active_intent = None
+            super().__init__(
+                tools=[detect],
+                model=model,
+                prompt_templates=_DETECT_PROMPT_TEMPLATES,
+                instructions=instructions,
+                stream_outputs=False,
+                max_tool_threads=1,
+                add_base_tools=False,
+                managed_agents=None,
+                planning_interval=None,
+                max_steps=1,
+                **kwargs,
+            )
+            return
+
+        if tools is None or gateway is None or privacy_context is None:
+            raise ValueError("Guarded mode requires tools, gateway and privacy_context")
         if kwargs.pop("stream_outputs", False):
             raise ValueError("Model token streaming is unsafe because partial deltas cannot be pre-scanned")
         managed_agents = kwargs.pop("managed_agents", None)
@@ -142,6 +215,14 @@ class SensitiveToolCallingAgent(ToolCallingAgent):
             **kwargs,
         )
 
+    def _setup_tools(self, tools: list[Tool], add_base_tools: bool) -> None:
+        if self._detect_only:
+            if add_base_tools or len(tools) != 1 or tools[0].name != "detect":
+                raise ValueError("Detect-only mode exposes exactly one tool named detect")
+            self.tools = {"detect": tools[0]}
+            return
+        super()._setup_tools(tools, add_base_tools)
+
     def run(
         self,
         task: str,
@@ -152,6 +233,25 @@ class SensitiveToolCallingAgent(ToolCallingAgent):
         max_steps: int | None = None,
         return_full_result: bool | None = None,
     ) -> Any:
+        if self._detect_only:
+            if images:
+                raise ValueError("Detect-only mode accepts text input only")
+            if additional_args:
+                raise ValueError("Detect-only mode does not accept additional arguments")
+            if not isinstance(task, str) or not task.strip():
+                raise ValueError("task must be a non-empty string")
+            self._detect_input = task
+            return ToolCallingAgent.run(
+                self,
+                task,
+                stream=stream,
+                reset=reset,
+                images=None,
+                additional_args=None,
+                max_steps=1,
+                return_full_result=return_full_result,
+            )
+
         if images:
             raise ValueError("SensitiveToolCallingAgent requires an OCR/vision guard before accepting images")
         if self.intent_resolver is not None:
@@ -221,6 +321,39 @@ class SensitiveToolCallingAgent(ToolCallingAgent):
         return answer
 
     def _step_stream(self, memory_step: ActionStep) -> Generator[ToolCall | ToolOutput | ActionOutput, None, None]:
+        if self._detect_only:
+            input_messages = self.write_memory_to_messages().copy()
+            memory_step.model_input_messages = input_messages
+            try:
+                chat_message = self.model.generate(
+                    input_messages,
+                    stop_sequences=["Observation:", "Calling tools:"],
+                    tools_to_call_from=[detect],
+                    tool_choice="required",
+                )
+            except Exception as error:
+                raise AgentGenerationError(f"Phone detector model generation failed: {error}", self.logger) from error
+
+            if not chat_message.tool_calls:
+                try:
+                    chat_message = self.model.parse_tool_calls(chat_message)
+                except Exception as error:
+                    raise AgentParsingError("The model did not call detect.", self.logger) from error
+            if len(chat_message.tool_calls or ()) != 1 or chat_message.tool_calls[0].function.name != "detect":
+                raise AgentParsingError("The model must call detect exactly once.", self.logger)
+            chat_message.tool_calls[0].function.arguments = {"text": self._detect_input}
+            memory_step.model_output_message = chat_message
+            memory_step.model_output = chat_message.content
+            memory_step.token_usage = chat_message.token_usage
+
+            final_answer: Any = None
+            for output in self.process_tool_calls(chat_message, memory_step):
+                yield output
+                if isinstance(output, ToolOutput):
+                    final_answer = output.output
+            yield ActionOutput(output=final_answer, is_final_answer=True)
+            return
+
         input_messages = self.write_memory_to_messages().copy()
         memory_step.model_input_messages = input_messages
         generation_failed = False
@@ -296,6 +429,15 @@ class SensitiveToolCallingAgent(ToolCallingAgent):
     def process_tool_calls(
         self, chat_message: ChatMessage, memory_step: ActionStep
     ) -> Generator[ToolCall | ToolOutput, None, None]:
+        if self._detect_only:
+            for output in ToolCallingAgent.process_tool_calls(self, chat_message, memory_step):
+                if isinstance(output, ToolOutput):
+                    if output.tool_call.name != "detect":
+                        raise AgentToolExecutionError("Only the detect tool is available.", self.logger)
+                    output.is_final_answer = True
+                yield output
+            return
+
         assert chat_message.tool_calls is not None
         public_calls: list[ToolCall] = []
         observations: list[str] = []
@@ -377,6 +519,11 @@ class SensitiveToolCallingAgent(ToolCallingAgent):
         memory_step.observations = "\n".join(observations) if observations else None
 
     def execute_tool_call(self, tool_name: str, arguments: dict[str, Any] | str) -> Any:
+        if self._detect_only:
+            if tool_name != "detect":
+                raise AgentToolExecutionError("Only the detect tool is available.", self.logger)
+            return detect(text=self._detect_input)
+
         tool = self.tools.get(tool_name)
         if not isinstance(tool, SensitiveGuardTool):
             raise AgentToolExecutionError("An unknown or unsafe tool call was rejected.", self.logger)
@@ -522,6 +669,18 @@ class SensitiveToolCallingAgent(ToolCallingAgent):
 
     def _handle_max_steps_reached(self, task: str) -> Any:
         start_time = time.time()
+        if self._detect_only:
+            final_answer = detect(text=self._detect_input)
+            final_memory_step = ActionStep(
+                step_number=self.step_number,
+                error=AgentMaxStepsError("The model did not call detect within one step.", self.logger),
+                timing=Timing(start_time=start_time, end_time=time.time()),
+                action_output=final_answer,
+            )
+            self._finalize_step(final_memory_step)
+            self.memory.steps.append(final_memory_step)
+            return final_answer
+
         try:
             message = super().provide_final_answer(task)
             candidate = message.content

@@ -27,7 +27,7 @@ if ! "$PY" -c "import pytest" 2>/dev/null; then
   echo "=== Installing pytest ==="
   "$PY" -m pip install -q "pytest>=8.1.0" pytest-timeout
 fi
-if ! command -v ruff >/dev/null 2>&1; then
+if ! "$PY" -c "import ruff" 2>/dev/null; then
   echo "=== Installing ruff ==="
   "$PY" -m pip install -q "ruff>=0.9.0"
 fi
@@ -37,10 +37,10 @@ SG_SRC="src/sensitiveguard"
 SG_TESTS="tests/sensitiveguard"
 
 echo "=== Quality: ruff check ==="
-ruff check "$SG_SRC" "$SG_TESTS"
+"$PY" -m ruff check "$SG_SRC" "$SG_TESTS"
 
 echo "=== Quality: ruff format --check ==="
-ruff format --check "$SG_SRC" "$SG_TESTS"
+"$PY" -m ruff format --check "$SG_SRC" "$SG_TESTS"
 
 echo "=== Tests: SensitiveGuard suite ==="
 "$PY" -m pytest "$SG_TESTS" -q -p no:cacheprovider

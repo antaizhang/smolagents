@@ -173,9 +173,11 @@ Docker / systemd 常驻部署见该目录 README 第三、四节。
 
 ---
 
-## 6. 用真实 LLM（Ollama）驱动完整 Agent
+## 6. 用真实 LLM（Ollama）驱动单工具手机号检测
 
-前面几节都不需要 LLM。这一节让 Ollama 上的模型真正驱动 SensitiveGuard agent 做守卫化的工具调用。
+这个入口用于验证最小 Tool Calling：原来的 `SensitiveToolCallingAgent` 只向 Ollama 暴露
+`detect(text)`，检测结果直接结束本次运行。它不执行 planning、`final_answer`、
+`guard_text`、模型路由或 deterministic security review。
 
 前置：Ollama 已在服务器上服务，模型已拉取。
 
@@ -184,7 +186,7 @@ pip install -e ".[litellm]"
 ollama list                              # 核对模型 tag
 curl http://127.0.0.1:11436/api/tags     # 确认端口 11436 在服务
 
-python examples/sensitiveguard/run_ollama_agent.py
+python examples/sensitiveguard/run_ollama_agent.py "请联系 13800138000"
 ```
 
 模型指向由环境变量控制（默认 `qwen3.5:9b` + `http://127.0.0.1:11436`，无需改代码）：
@@ -196,7 +198,7 @@ python examples/sensitiveguard/run_ollama_agent.py
 | `SG_OLLAMA_NUM_CTX` | `8192` | 上下文长度（Ollama 默认 2048 对 agent 太小） |
 | `SG_OLLAMA_API_KEY` | `ollama` | 随便填非空值，Ollama 忽略 |
 
-自己接完整流程时，统一用共享工厂即可"整个项目都走 Ollama"：
+代码调用方式：
 
 ```python
 from sensitiveguard import build_ollama_model, create_sensitive_agent
@@ -204,16 +206,20 @@ from sensitiveguard.privacy import PrivacyContext
 
 model = build_ollama_model()                      # 指向你的 Ollama
 context = PrivacyContext(
-    task="检测并脱敏客户备注里的敏感数据",
-    purpose="customer_support_ticket_triage",
-    trust_level="internal",
-    allowed_operations=("detect", "mask", "redact", "sanitize"),
+    task="判断输入中是否包含中国大陆手机号",
+    purpose="local_phone_detection",
+    requester="local_user",
+    destination="local",
+    trust_level="local",
+    allowed_operations=("detect",),
 )
 agent = create_sensitive_agent(model, context)
-print(agent.run("扫描并脱敏：客户张三 手机13800138000 身份证440101199001011234"))
+print(agent.run("客户手机号是 13800138000"))
+# {'has_phone': True, 'count': 1}
 ```
 
-> 9B 模型 agentic 能力偏弱，简单脱敏任务可跑；表现不好就换更大模型或减少工具。
+`detect` 只返回是否命中和数量，不返回原号码。工具执行时始终检查完整原始输入，
+不会采用模型改写后的 `text` 参数。
 
 ---
 
@@ -284,7 +290,7 @@ result = agent.run(f"处理本地文件 {input_file}：先扫描敏感数据，�
 | `src/sensitiveguard/factory.py` | `SensitiveGuardRuntime` / `create_sensitive_agent` |
 | `src/sensitiveguard/llm.py` | `build_ollama_model` 统一模型工厂 |
 | `examples/sensitiveguard/offline_demo.py` | 离线三路验收（第 2 节） |
-| `examples/sensitiveguard/run_ollama_agent.py` | Ollama 驱动完整 agent（第 6 节） |
+| `examples/sensitiveguard/run_ollama_agent.py` | Ollama 驱动单工具手机号检测（第 6 节） |
 | `examples/sensitiveguard/run_ollama_file_agent.py` | 从输入文件把 plan/act/observation 串起来（第 6.5 节） |
 | `examples/sensitiveguard/detection/` | 检测链逐层走查（第 4 节） |
 | `examples/sensitiveguard/demo_server/` | HTTP 演示服务 + 38 用例（第 5 节） |

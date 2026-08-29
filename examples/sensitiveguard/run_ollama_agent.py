@@ -1,8 +1,4 @@
-"""Run the SensitiveGuard agent end-to-end against a local Ollama server.
-
-This is the LLM-driven counterpart to ``offline_demo.py`` (which is scripted
-and never touches a model). It builds a real SensitiveGuard runtime and lets
-an Ollama-hosted model drive the guarded tool calls.
+"""Run the original SensitiveAgent with one phone-number detection tool.
 
 Prerequisites
 -------------
@@ -17,10 +13,12 @@ Configuration (all optional; defaults target port 11436 / qwen3.5:9b)
 
 Run
 ---
-    python examples/sensitiveguard/run_ollama_agent.py
+    python examples/sensitiveguard/run_ollama_agent.py "请联系 13800138000"
 """
 
 from __future__ import annotations
+
+import sys
 
 from sensitiveguard import build_ollama_model, create_sensitive_agent
 from sensitiveguard.privacy import PrivacyContext
@@ -30,31 +28,27 @@ def main() -> None:
     # 1. The LLM: points at your Ollama server via env vars / defaults.
     model = build_ollama_model()
 
-    # 2. The privacy contract for this run: what the agent may see and do.
+    # The existing factory signature still accepts a context, but detect-only
+    # mode does not construct or execute the old guard/review pipeline.
     context = PrivacyContext(
-        task="Detect and mask any sensitive data in the provided customer note.",
-        purpose="customer_support_ticket_triage",
-        requester="support_agent",
-        trust_level="internal",
-        allowed_operations=("detect", "mask", "redact", "sanitize"),
+        task="Determine whether the user input contains a mainland China mobile number.",
+        purpose="local_phone_detection",
+        requester="local_user",
+        destination="local",
+        trust_level="local",
+        allowed_operations=("detect",),
     )
 
-    # 3. Assemble the guarded agent. The default tool set covers detection,
-    #    masking/redaction/pseudonymization, policy evaluation and auditing.
+    # The existing SensitiveToolCallingAgent now exposes one business tool:
+    # detect(text). Its result ends the run, so no final_answer tool is added.
     agent = create_sensitive_agent(model, context)
 
-    note = (
-        "Customer John Smith called about order #A-1042. "
-        "Reach him at john.smith@example.com or +1-202-555-0143. "
-        "His card on file ends 4242 and his SSN is 123-45-6789."
-    )
-    task = (
-        "Scan the following customer note for sensitive data, then return a masked "
-        "version that is safe to store in the ticket system:\n\n" + note
-    )
+    task = " ".join(sys.argv[1:]).strip() if len(sys.argv) > 1 else input("请输入文本: ").strip()
+    if not task:
+        raise SystemExit("输入不能为空")
 
     result = agent.run(task)
-    print("\n=== SensitiveGuard result ===")
+    print("\n=== Detection result ===")
     print(result)
 
 

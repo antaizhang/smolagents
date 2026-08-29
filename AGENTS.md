@@ -29,7 +29,9 @@ If baseline verification (`./init.sh`) is failing, repair that first before addi
 - **Security invariants (SensitiveGuard-specific), never regress:**
   - A user prompt can only *narrow* the trusted host intent ceiling — never expand
     operations, capabilities, effects, fields, destinations, or recipients.
-  - Guards run before model input, before egress, and before memory/log exposure.
+  - The legacy guarded runtime runs guards before model input, before egress, and before memory/log exposure.
+  - The explicit local `detect_only` mode is a narrow demo exception: it exposes only `detect`, performs no egress,
+    and must not be configured with an external model destination.
   - Failures are fail-closed and never echo raw sensitive input or private canaries.
 
 ## Contributor Guidelines

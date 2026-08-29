@@ -355,6 +355,15 @@ def create_sensitive_agent(
     tool_kwargs: dict[str, Any] | None = None,
     agent_kwargs: dict[str, Any] | None = None,
 ) -> SensitiveToolCallingAgent:
-    runtime = SensitiveGuardRuntime.create(context, **(runtime_kwargs or {}))
-    tools = runtime.build_tools(**(tool_kwargs or {}))
-    return runtime.create_agent(model, tools=tools, **(agent_kwargs or {}))
+    """Create the existing Agent in local one-tool phone-detection mode."""
+
+    if runtime_kwargs or tool_kwargs:
+        raise ValueError("The detect-only agent does not accept runtime or tool configuration")
+    options = dict(agent_kwargs or {})
+    options.pop("detect_only", None)
+    return SensitiveToolCallingAgent(
+        model=model,
+        privacy_context=context,
+        detect_only=True,
+        **options,
+    )

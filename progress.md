@@ -2,8 +2,8 @@
 
 ## Current State
 
-**Last Updated:** 2026-08-27
-**Active Feature:** None — the external single-case B0-B4 walkthrough is complete and verified.
+**Last Updated:** 2026-08-29
+**Active Feature:** None — the original agent's local detect-only phone mode is complete and verified.
 
 ## Status
 
@@ -24,6 +24,10 @@
 - [x] Documented which external component is replaced by each bridge, where the authoritative scorer runs, how native results are normalized, and which integrations remain constrained or unverified.
 - [x] Pinned one public sample each from AgentDojo, PrivacyLens, BFCL, and tau3 and added a deterministic walkthrough that replays the same raw candidate through B0-B4.
 - [x] Added observable sample/oracle, plan, intent, proposed and executed tool arguments, memory, guard decision, final-output, and transparent local-score events with interactive pause and JSON export modes.
+- [x] Removed the separate `run_ollama_phone_agent.py` path and put phone detection directly into the existing `SensitiveToolCallingAgent`.
+- [x] Made `create_sensitive_agent()` and `run_ollama_agent.py` expose exactly one business tool, `detect`, with no planning, `final_answer`, task guard, model route, or deterministic security review on that local path.
+- [x] Forced `tool_choice="required"`, executed detection against the complete original task, and returned only `has_phone`/`count`.
+- [x] Repaired `init.sh` so installed Ruff is invoked through the selected Python interpreter instead of relying on `PATH`.
 
 ### What's In Progress
 
@@ -51,6 +55,7 @@
 - **Disclose adapter coverage, not just commands**: the runbook calls out PrivacyLens/AgentDAM B3-B4 equivalence, BFCL endpoint/history limitations, and tau3's text-only utility focus.
 - **Separate the teaching walkthrough from official benchmark claims**: the four single-case scorers are deterministic, transparent diagnostics (`official: false`); upstream harnesses and scorers remain authoritative.
 - **Replay an identical raw proposal across B0-B4**: baseline differences are applied only after proposal capture, making detection, redaction, intent narrowing, memory visibility, and execution decisions directly comparable.
+- **Keep one existing Agent class**: detect-only behavior is a mode of `SensitiveToolCallingAgent`; no second phone Agent is added. The guarded runtime remains available only through the explicit `SensitiveGuardRuntime.create_agent()` compatibility path.
 
 ## Files Modified This Session
 
@@ -64,6 +69,10 @@
 - `examples/sensitiveguard/run_external_eval_walkthrough.py` provides interactive and JSON walkthrough output.
 - `src/sensitiveguard/eval/external/walkthrough.py` implements deterministic B0-B4 replay and transparent scoring; the external AgentDojo bridge and metric normalization were corrected alongside it.
 - `tests/sensitiveguard/test_external_eval_walkthrough.py` covers the four samples and all 20 sample/baseline combinations.
+- `src/sensitiveguard/agent/sensitive_agent.py` now owns the single `detect` tool and detect-only execution path.
+- `examples/sensitiveguard/run_ollama_agent.py` is the only Ollama phone-detection entry; the separate phone Agent/module/test files were removed.
+- `tests/sensitiveguard/test_agent_runtime.py` covers direct detection and the one-tool model/factory paths.
+- `init.sh` invokes Ruff through the selected Python interpreter.
 - `feature_list.json`, `progress.md`, and `session-handoff.md` record the documentation and verification evidence.
 
 ## Evidence of Completion
@@ -77,6 +86,8 @@
 - [x] External adapter unit tests: `pytest tests/sensitiveguard/test_external_eval_adapters.py` → 3 passed.
 - [x] External CLI inventory: `python -m sensitiveguard.eval.external --list` → all six adapters registered.
 - [x] README checks: local links exist, 146 fenced-code delimiters are balanced, and `git diff --check` is clean.
+- [x] Detect-only focused tests: `pytest tests/sensitiveguard/test_agent_runtime.py` → 23 passed.
+- [x] Current full harness: `./init.sh` → Ruff/format/compileall clean and 332 passed (2026-08-29).
 
 ## Notes for Next Session
 

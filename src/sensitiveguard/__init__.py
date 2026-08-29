@@ -1,6 +1,6 @@
 """SensitiveGuard: context-aware privacy enforcement for smolagents workflows."""
 
-from .agent import PrivacyContextBuilder, SensitiveDataAgent, SensitiveToolCallingAgent
+from .agent import PrivacyContextBuilder, SensitiveDataAgent, SensitiveToolCallingAgent, detect
 from .audit import AuditLogger
 from .detector import (
     PII_LABELS,
@@ -48,7 +48,6 @@ from .lineage import (
     OperationStatus,
 )
 from .llm import build_ollama_model
-from .phone_tool import detect
 from .mcp import MCPGateway, MCPSchemaValidator, TrustStore
 from .memory import MemoryGuard, SanitizedMemoryStore
 from .models import (

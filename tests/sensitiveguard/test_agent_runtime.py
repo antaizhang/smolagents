@@ -8,8 +8,8 @@ from typing import Any
 
 import pytest
 
-from sensitiveguard.agent import SensitiveToolCallingAgent
-from sensitiveguard.factory import SensitiveGuardRuntime
+from sensitiveguard.agent import SensitiveToolCallingAgent, detect
+from sensitiveguard.factory import SensitiveGuardRuntime, create_sensitive_agent
 from sensitiveguard.models import Severity
 from sensitiveguard.privacy import PrivacyContext
 from sensitiveguard.routing import EndpointDescriptor
@@ -69,6 +69,7 @@ class _ScriptedModel(Model):
         self.responses = list(responses)
         self.received_messages: list[list[ChatMessage]] = []
         self.offered_tool_names: list[tuple[str, ...]] = []
+        self.generation_kwargs: list[dict[str, Any]] = []
 
     @property
     def calls(self) -> int:
@@ -82,9 +83,10 @@ class _ScriptedModel(Model):
         tools_to_call_from: list[Tool] | None = None,
         **kwargs: Any,
     ) -> ChatMessage:
-        del stop_sequences, response_format, kwargs
+        del stop_sequences, response_format
         self.received_messages.append(deepcopy(messages))
         self.offered_tool_names.append(tuple(tool.name for tool in (tools_to_call_from or ())))
+        self.generation_kwargs.append(dict(kwargs))
         if not self.responses:
             raise AssertionError("The offline model received an unexpected generate() call")
         return self.responses.pop(0)
@@ -272,6 +274,56 @@ def _memory_text(agent: SensitiveToolCallingAgent) -> str:
 def _assert_absent(serialized: str, *values: str) -> None:
     for value in values:
         assert value not in serialized
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("客户希望下周再次联系", {"has_phone": False, "count": 0}),
+        ("请联系13800138000", {"has_phone": True, "count": 1}),
+        ("主号码 +86 13800138000，备用 139-0013-9000", {"has_phone": True, "count": 2}),
+    ],
+)
+def test_detect_reports_phone_presence_without_returning_raw_values(
+    text: str, expected: dict[str, bool | int]
+) -> None:
+    result = detect(text=text)
+
+    assert result == expected
+    assert "13800138000" not in repr(result)
+    assert "13900139000" not in repr(result)
+
+
+def test_detect_only_agent_exposes_one_tool_and_uses_the_complete_task() -> None:
+    task = "客户完整输入：请联系 13800138000"
+    model = _ScriptedModel([_tool_call_message("detect", {"text": "模型错误改写的内容"}, call_id="detect-call")])
+    agent = SensitiveToolCallingAgent(
+        model=model,
+        detect_only=True,
+        verbosity_level=LogLevel.OFF,
+    )
+
+    result = agent.run(task)
+
+    assert result == {"has_phone": True, "count": 1}
+    assert tuple(agent.tools) == ("detect",)
+    assert model.offered_tool_names == [("detect",)]
+    assert model.generation_kwargs == [{"tool_choice": "required"}]
+    assert model.calls == 1
+    action_step = next(step for step in agent.memory.steps if isinstance(step, ActionStep))
+    assert action_step.tool_calls[0].arguments == {"text": task}
+
+
+def test_create_sensitive_agent_uses_detect_only_mode() -> None:
+    model = _ScriptedModel([_tool_call_message("detect", {"text": "没有号码"}, call_id="factory-detect-call")])
+    agent = create_sensitive_agent(
+        model,
+        _privacy_context("detect-only-factory"),
+        agent_kwargs={"verbosity_level": LogLevel.OFF},
+    )
+
+    assert agent.run("没有号码") == {"has_phone": False, "count": 0}
+    assert tuple(agent.tools) == ("detect",)
 
 
 def test_regular_final_answer_is_recursively_guarded_before_return_and_memory() -> None:
