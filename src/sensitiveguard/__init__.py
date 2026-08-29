@@ -48,6 +48,7 @@ from .lineage import (
     OperationStatus,
 )
 from .llm import build_ollama_model
+from .phone_tool import detect
 from .mcp import MCPGateway, MCPSchemaValidator, TrustStore
 from .memory import MemoryGuard, SanitizedMemoryStore
 from .models import (
@@ -142,6 +143,7 @@ __all__ = [
     "DecisionSet",
     "DetectionResult",
     "Detector",
+    "detect",
     "DisclosureLedger",
     "Effect",
     "EgressCommandInspector",
