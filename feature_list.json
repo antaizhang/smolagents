@@ -8,6 +8,46 @@
       "dependencies": [],
       "status": "done",
       "evidence": "./init.sh: Ruff clean, format clean, 14 focused tests passed, compileall passed (2026-08-30)."
+    },
+    {
+      "id": "feat-002",
+      "name": "Confidence-gated detection cascade",
+      "description": "Per content kind, high-precision patterns run first, a recall tier flags number-shaped runs tier 0 cannot read, and an optional adjudicating tier receives only the still-ambiguous spans. No tier may weaken a settled fact or speak about a span it was not handed.",
+      "dependencies": [
+        "feat-001"
+      ],
+      "status": "done",
+      "evidence": "./init.sh: Ruff clean, format clean, 169 focused tests passed, compileall passed (2026-08-30)."
+    },
+    {
+      "id": "feat-003",
+      "name": "Declarative policy engine",
+      "description": "A versioned, diffable YAML rule set resolves label x confidence x purpose x destination x caller role into allow/mask/hash/tokenize/block/review, first match wins, fail-closed, with a printable decision path and test vectors carried in the file itself.",
+      "dependencies": [
+        "feat-002"
+      ],
+      "status": "done",
+      "evidence": "./init.sh: Ruff clean, format clean, 169 focused tests passed, compileall passed (2026-08-30)."
+    },
+    {
+      "id": "feat-004",
+      "name": "Disposition routing and reversibility",
+      "description": "Verdicts dispatch to one handler per action: masking and salted hashing are one-way, tokenisation is reversible through a vault, and whether a response is restored is a policy switch.",
+      "dependencies": [
+        "feat-003"
+      ],
+      "status": "done",
+      "evidence": "./init.sh: Ruff clean, format clean, 169 focused tests passed, compileall passed (2026-08-30)."
+    },
+    {
+      "id": "feat-005",
+      "name": "Privilege separation and output review",
+      "description": "The agent that reads untrusted content returns only facts and holds no authority; the agent that decides never opens the envelope. A reviewer re-checks released output for surviving values and for over-redaction.",
+      "dependencies": [
+        "feat-004"
+      ],
+      "status": "done",
+      "evidence": "./init.sh: Ruff clean, format clean, 169 focused tests passed, compileall passed (2026-08-30)."
     }
   ]
 }

@@ -1,0 +1,205 @@
+# The default egress policy.
+#
+# Rules are evaluated top to bottom and the first match wins, so ordering is
+# part of the meaning: put the facts that never leave at the top, the narrow
+# exemptions next, and the catch-alls at the bottom. Anything that matches no
+# rule falls to `default_action`, which is deliberately not `allow`.
+#
+# Every rule states only the dimensions it cares about; an omitted dimension
+# matches anything. The dimensions are the ones a real verdict depends on:
+# label x confidence x purpose x destination x caller role.
+
+name: default-egress-policy
+version: "2026.08.30"
+default_action: review
+default_reason: >-
+  No rule matched. An unclaimed combination of label, destination and caller is
+  held for a human rather than released.
+
+rules:
+  # ---------------------------------------------------------------- never out
+  - id: id-card-any-egress
+    when:
+      labels: [ID_CARD]
+      min_confidence: 0.5
+    action: block
+    alert: true
+    reason: Resident id numbers do not cross any egress, whatever the caller or destination.
+
+  - id: credential-any-egress
+    when:
+      labels: [API_KEY]
+      min_confidence: 0.5
+    action: block
+    alert: true
+    reason: A credential in outbound content is an incident, not a formatting problem.
+
+  # ------------------------------------------------- the owner's own content
+  - id: owner-editing-passthrough
+    when:
+      labels: [PHONE, EMAIL]
+      destinations: [user_document]
+      caller_roles: [user]
+      purposes: [editing]
+      min_confidence: 0.5
+    action: allow
+    reason: The user is editing their own document; masking their own contact details would break the task.
+
+  # ------------------------------------- reversible round trip (hide and seek)
+  - id: contact-external-round-trip
+    when:
+      labels: [PHONE, EMAIL]
+      destinations: [external_llm]
+      purposes: [round_trip]
+      min_confidence: 0.5
+    action: tokenize
+    restore_on_response: true
+    reason: >-
+      The reply has to carry the real value back, so the value goes out behind a
+      vault token and is restored on the way in. Masking here would be silently
+      lossy.
+
+  # ------------------------------------------------------ one-way egress out
+  - id: phone-external-egress
+    when:
+      labels: [PHONE]
+      destinations: [external_llm, third_party_api]
+      min_confidence: 0.5
+    action: mask
+    reason: A phone number leaving the process is masked; nothing downstream needs to read it back.
+
+  - id: email-external-egress
+    when:
+      labels: [EMAIL]
+      destinations: [external_llm, third_party_api]
+      min_confidence: 0.5
+    action: mask
+    reason: An address leaving the process is masked; nothing downstream needs to read it back.
+
+  - id: bank-card-external-egress
+    when:
+      labels: [BANK_CARD]
+      destinations: [external_llm, third_party_api]
+      min_confidence: 0.5
+    action: block
+    alert: true
+    reason: Card numbers are not sent to third parties.
+
+  # ------------------------------------------------------------ internal sinks
+  - id: contact-internal-log
+    when:
+      labels: [PHONE, EMAIL, BANK_CARD]
+      destinations: [internal_log, analytics]
+      min_confidence: 0.5
+    action: hash
+    reason: >-
+      Logs need a stable key to correlate on, not a readable value. Hashing keeps
+      the join and drops the content, one-way.
+
+  # ------------------------------------------------------------ unsettled spans
+  - id: unsettled-external
+    when:
+      destinations: [external_llm, third_party_api]
+      max_confidence: 0.5
+    action: review
+    reason: The cascade could not settle this span, and nothing ambiguous goes to an external model unreviewed.
+
+  - id: unsettled-internal
+    when:
+      max_confidence: 0.5
+    action: allow
+    reason: An unsettled span that never leaves the trust boundary is not worth a reviewer's time.
+
+# Test vectors carried by the policy itself. `PolicyEngine.self_test()` runs
+# them, so a rule reordering that changes an answer fails the build instead of
+# surprising an auditor six months later.
+expectations:
+  - name: phone to an external model is masked
+    label: PHONE
+    confidence: 0.95
+    destination: external_llm
+    caller_role: agent
+    purpose: tool_call
+    expect_action: mask
+    expect_rule: phone-external-egress
+
+  - name: phone to an internal log is hashed
+    label: PHONE
+    confidence: 0.95
+    destination: internal_log
+    caller_role: service
+    purpose: observability
+    expect_action: hash
+    expect_rule: contact-internal-log
+
+  - name: an id number is blocked at every egress
+    label: ID_CARD
+    confidence: 0.99
+    destination: user_document
+    caller_role: user
+    purpose: editing
+    expect_action: block
+    expect_rule: id-card-any-egress
+
+  - name: the user editing their own document is left alone
+    label: PHONE
+    confidence: 0.95
+    destination: user_document
+    caller_role: user
+    purpose: editing
+    expect_action: allow
+    expect_rule: owner-editing-passthrough
+
+  - name: an agent may not borrow the owner exemption
+    label: PHONE
+    confidence: 0.95
+    destination: user_document
+    caller_role: agent
+    purpose: editing
+    expect_action: review
+    expect_rule: __default__
+
+  - name: a round trip tokenises instead of masking
+    label: PHONE
+    confidence: 0.95
+    destination: external_llm
+    caller_role: agent
+    purpose: round_trip
+    expect_action: tokenize
+    expect_rule: contact-external-round-trip
+
+  - name: a credential is an incident wherever it is headed
+    label: API_KEY
+    confidence: 0.9
+    destination: internal_log
+    caller_role: service
+    purpose: observability
+    expect_action: block
+    expect_rule: credential-any-egress
+
+  - name: an unsettled span is held back from an external model
+    label: PHONE
+    confidence: 0.35
+    destination: external_llm
+    caller_role: agent
+    purpose: tool_call
+    expect_action: review
+    expect_rule: unsettled-external
+
+  - name: the same unsettled span is allowed to stay inside
+    label: PHONE
+    confidence: 0.35
+    destination: user_document
+    caller_role: user
+    purpose: editing
+    expect_action: allow
+    expect_rule: unsettled-internal
+
+  - name: an unknown destination falls closed
+    label: PHONE
+    confidence: 0.95
+    destination: pastebin
+    caller_role: agent
+    purpose: tool_call
+    expect_action: review
+    expect_rule: __default__
