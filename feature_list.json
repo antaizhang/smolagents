@@ -3,107 +3,11 @@
   "features": [
     {
       "id": "feat-001",
-      "name": "Harness baseline (install + verification)",
-      "description": "A clean checkout can install the SensitiveGuard toolchain and run the quality gate and test suite via ./init.sh with a green result.",
+      "name": "One-tool phone detection Agent",
+      "description": "An Ollama-backed Agent exposes only detect(text) and returns has_phone/count for mainland China mobile numbers.",
       "dependencies": [],
       "status": "done",
-      "evidence": "./init.sh => ruff check clean, ruff format --check clean, 310 passed in ~34s, compileall clean (2026-08-23)."
-    },
-    {
-      "id": "feat-002",
-      "name": "Intent model, resolver and guard",
-      "description": "Signed IntentSpec ceiling with rule-based operation inference, capability/effect derivation, and plan validation (src/sensitiveguard/intent/).",
-      "dependencies": ["feat-001"],
-      "status": "done",
-      "evidence": "tests/sensitiveguard/test_intent.py (part of 310 passing)."
-    },
-    {
-      "id": "feat-003",
-      "name": "Dynamic request-intent binding",
-      "description": "Bind the current guarded user prompt to a signed child intent that can only narrow the host ceiling, never expand it (src/sensitiveguard/dynamic_agent.py).",
-      "dependencies": ["feat-002"],
-      "status": "done",
-      "evidence": "Built-in and host-registered capabilities/effects derive only from surviving effective_operations. tests/sensitiveguard/test_dynamic_agent.py::test_user_prompt_cannot_expand_host_authority passes; full suite 310 passed."
-    },
-    {
-      "id": "feat-004",
-      "name": "Detectors (encoded / injection / normalization)",
-      "description": "Sensitive-data and prompt-injection detection over normalized and encoded inputs (src/sensitiveguard/detector/).",
-      "dependencies": ["feat-001"],
-      "status": "done",
-      "evidence": "Detection covered across the SensitiveGuard suite (310 passing); walkthrough in examples/sensitiveguard/detection/."
-    },
-    {
-      "id": "feat-005",
-      "name": "Privacy routing",
-      "description": "Route models and destinations by detection result, forbidding silent external fallback (src/sensitiveguard/routing/).",
-      "dependencies": ["feat-002"],
-      "status": "done",
-      "evidence": "tests/sensitiveguard/test_routing_review_security.py (part of 310 passing)."
-    },
-    {
-      "id": "feat-006",
-      "name": "Review engine and permits",
-      "description": "Policy review and signed permits governing capability execution (src/sensitiveguard/review/).",
-      "dependencies": ["feat-005"],
-      "status": "done",
-      "evidence": "tests/sensitiveguard/test_routing_review_security.py (part of 310 passing)."
-    },
-    {
-      "id": "feat-007",
-      "name": "Runtime: capability manifest, safe command, egress inspector, gateway",
-      "description": "Capability-scoped tool gateway, fail-closed command execution, and egress inspection/masking (src/sensitiveguard/runtime/).",
-      "dependencies": ["feat-006"],
-      "status": "done",
-      "evidence": "tests/sensitiveguard/test_safe_command.py, test_egress_inspector.py, test_agent_runtime.py (part of 310 passing)."
-    },
-    {
-      "id": "feat-008",
-      "name": "Lineage tracking",
-      "description": "Track data lineage/provenance and mark failed side effects as indeterminate rather than committed (src/sensitiveguard/lineage/).",
-      "dependencies": ["feat-002"],
-      "status": "done",
-      "evidence": "tests/sensitiveguard/test_lineage.py (part of 310 passing)."
-    },
-    {
-      "id": "feat-009",
-      "name": "Audit logging and sanitization",
-      "description": "Structured audit events with private-canary sanitization so secrets never enter logs (src/sensitiveguard/audit/).",
-      "dependencies": ["feat-001"],
-      "status": "done",
-      "evidence": "Audit sanitization asserted across the SensitiveGuard suite (310 passing)."
-    },
-    {
-      "id": "feat-010",
-      "name": "Evaluation and acceptance harness",
-      "description": "Executable benchmark, scenario runner, sinks and acceptance report (src/sensitiveguard/eval/).",
-      "dependencies": ["feat-007"],
-      "status": "done",
-      "evidence": "Five-layer B0-B4 harness covered by test_benchmark_harness.py and test_demo_server.py; examples/sensitiveguard/README.md now documents the internal gate, real-model runs, custom JSONL, and end-to-end AgentDojo, AgentThreatBench, PrivacyLens, AgentDAM, BFCL, and tau3 workflows. `./init.sh` => 310 passed and `python -m sensitiveguard.eval` => B4 PASS across 30 scenarios / 150 runs (2026-08-23)."
-    },
-    {
-      "id": "feat-011",
-      "name": "Full-repo quality gate (whole tree)",
-      "description": "Extend the green baseline to `make quality` and `make test` across the entire repo, not just the sensitiveguard scope, so CI parity is guaranteed.",
-      "dependencies": ["feat-001"],
-      "status": "not-started",
-      "evidence": ""
-    },
-    {
-      "id": "feat-012",
-      "name": "External benchmark single-case B0-B4 walkthrough",
-      "description": "Pin one public AgentDojo, PrivacyLens, BFCL, and tau3 sample and replay the identical raw candidate through B0-B4 with observable tool, detection, transformation, intent, memory, audit, and transparent local-score events.",
-      "dependencies": ["feat-010"],
-      "status": "done",
-      "evidence": "Four pinned fixtures plus a deterministic B0-B4 walkthrough CLI and transparent local scorers are covered by tests/sensitiveguard/test_external_eval_walkthrough.py. Focused tests: 20 passed; BFCL JSON CLI smoke passed; ./init.sh: ruff/format/compileall clean and 327 passed (2026-08-27)."
-    },
-    {
-      "id": "feat-013",
-      "name": "Original agent detect-only phone mode",
-      "description": "Use the existing SensitiveToolCallingAgent and run_ollama_agent.py with exactly one business tool, detect(text), for local mainland-China mobile-number detection without planning, final_answer, task guarding, model routing, or deterministic tool security review.",
-      "dependencies": ["feat-001"],
-      "status": "done",
-      "evidence": "tests/sensitiveguard/test_agent_runtime.py verifies one offered tool, required tool choice, full-input execution, raw-number-free results, and the public factory path. ./init.sh: ruff/format/compileall clean and 332 passed (2026-08-29)."
+      "evidence": "./init.sh: Ruff clean, format clean, 14 focused tests passed, compileall passed (2026-08-30)."
     }
   ]
 }

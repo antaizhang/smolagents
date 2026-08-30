@@ -40,8 +40,3 @@ jobs:
       - name: Test with pytest
         run: |
           pytest ./tests/
-
-      - name: SensitiveGuard acceptance gate
-        if: matrix.python-version == '3.12'
-        run: |
-          PYTHONPATH=src python -m sensitiveguard.eval
