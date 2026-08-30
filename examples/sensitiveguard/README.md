@@ -143,6 +143,72 @@ python examples/sensitiveguard/run_ollama_agent.py "请联系 13800138000"
 | `SG_OLLAMA_NUM_CTX` | `8192` |
 | `SG_OLLAMA_API_KEY` | `ollama` |
 
+## 4. 外部基准：六个,各测一条边
+
+守卫挂着六个外部基准,全部离线跑,一条命令:
+
+```bash
+python -m sensitiveguard.eval run           # 六个,按顺序
+python -m sensitiveguard.eval run agentdojo # 单个
+python -m sensitiveguard.eval lint          # 三份 policy 的结构 lint
+python examples/sensitiveguard/run_external_benchmarks.py
+```
+
+顺序不是随意的——每一个都要用到上一个搭好的东西:
+
+| 基准 | 测什么 | 需要先有的东西 |
+|---|---|---|
+| **AirGapAgent-R** | 26 个字段 × 10 个场景,该分享的到该到的地方 | label 词表打开(不再被 5 个检测器标签卡死) |
+| **PrivacyLens** | 轨迹里乐于助人的 agent 过度分享 | 出口动作:一个能泄漏到的目的地 |
+| **AgentDAM** | web agent 填表,顺便量 routing 成本 | 每动作代价(纯确定性规则求值,不上模型) |
+| **AgentLeak** | 多 agent 链,秘密**跨了哪条内部通道** | 审计总线(C2–C5),不是只看最后一跳 |
+| **AgentDojo** | 工具结果里的注入,对比 no-defense baseline | 读取者/规划者分离 |
+| **ASB** | 同一注入的各个攻击家族,按家族出表 | 同上;结构防御 = 平的一行 |
+
+两个 runtime,差别只有一处:`no-defence` 把不可信内容读进规划者并照做,`guarded` 只给规划者
+事实和引用。注入类基准的攻击成功率因此是 100% → 0%,而且是结构性的——注入的指令根本到不了
+做决定的组件,所以它写了什么无关紧要。跑的时候 baseline **必须真的能被攻破**,干净对照**必须还能
+完成**,否则数字什么都没测到。
+
+`airgap-agent-r` 的 `fallthrough` 计数器是准确率的诚实伴侣:准确率高但 fallthrough 高,说明
+policy 靠"什么都不分享"刷分。这里 utility 是 100%(该分享的都分享了),privacy 没到满分
+(几个类别规则和逐格 ground truth 的分歧被保留下来),正是这个计数器让"刷分"藏不住。
+
+要跑真实上游数据集:`--data <path>`,每个基准的 `normalize_*` 把上游记录映到内部形状。适配器
+就是 `field → label`、`scenario → destination` 这一层,别的都已经对齐。
+
+## 5. 结构 lint 与不变量
+
+`PolicyEngine.lint()` 查三件光靠单个测试用例查不出的事:
+
+- **unreachable** —— 前面更宽的规则已经把它整个盖住,这条永远不触发。
+- **unscoped-allow** —— `allow` 没写 `destinations`。它读起来是"到处放行",实际意思往往是
+  "上面规则没认领的地方放行",而这是关于行号的事实,不是关于 policy 的。这条不变量比单点用例
+  更能扛住后人改规则,`load_policy` 严格模式直接拒绝带 error 级发现的 policy。
+- **order-sensitive / order-pinned** —— 两条规则都匹配同一请求且裁决不同,只有文件顺序在分。
+  每条发现带一个 witness(具体的 `label × confidence × context`),可以粘进测试跑。有 expectation
+  盖住这块争议区就降级成 `order-pinned`——顺序仍然要紧,但有回归测试钉着。
+
+置信区间是**半开**的 `[min, max)`:一个阈值把范围切成正好两块,`0.5` 只属于一边,没有请求
+同时落进两条规则——这从结构上消除了一整类"顺序颠倒静默改变行为"的问题。
+
+## 6. 审计总线:记录去向,自己不成为去向
+
+审计一个会存下所被审计值的日志,本身就是第六条、也是最糟的一条通道。所以 `AuditEvent` 不存内容,
+只存每个跨界值的**带密钥摘要**——够回答"这个秘密跨过这条通道没有"(泄漏探针要问的),不够回答
+"跨过去的是什么"(攻击者要问的)。每个 run 一条总线,盐是 per-bus 的,摘要只在这个 run 里可比。
+
+```python
+from sensitiveguard import SensitiveGuard
+from sensitiveguard.audit import AuditBus
+
+bus = AuditBus()
+guard = SensitiveGuard().with_audit(bus)
+guard.inspect("call 13800138000", destination="external_llm", caller_role="agent", purpose="round_trip")
+print(bus.channels_carrying("13800138000"))  # 它跨过了哪几条通道
+print(bus.summary())  # C1..C6 各几次
+```
+
 ## 测试
 
 ```bash

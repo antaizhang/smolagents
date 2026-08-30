@@ -20,9 +20,16 @@ The layers are deliberately separate, and the seams are the design:
 ``review``
     Checking the output both ways: the mask has to hold, and it has to leave
     enough behind for the task to still work.
+``audit``
+    Which internal boundary each value crossed. Recorded by digest, so a leak
+    probe can ask *where* something went without the trail becoming the leak.
+``eval``
+    The benchmarks. Six of them, each one measuring a different edge of the
+    system, all runnable without a network.
 """
 
 from .agents import PrivilegedGuardAgent, QuarantinedDetectorAgent
+from .audit import FACT_ONLY_CHANNELS, AuditBus, AuditEvent, Channel
 from .detection import (
     API_KEY,
     BANK_CARD,
@@ -47,6 +54,7 @@ from .policy import (
     Action,
     Condition,
     Decision,
+    LintFinding,
     Policy,
     PolicyEngine,
     PolicyError,
@@ -67,11 +75,15 @@ __all__ = [
     "EMAIL",
     "ID_CARD",
     "PHONE",
+    "FACT_ONLY_CHANNELS",
     "Action",
     "AmbiguousNumberDetector",
+    "AuditBus",
+    "AuditEvent",
     "CapabilityRouter",
     "CascadeDetector",
     "CascadeTier",
+    "Channel",
     "Condition",
     "ContentKind",
     "Decision",
@@ -83,6 +95,7 @@ __all__ = [
     "Finding",
     "GuardResult",
     "Leak",
+    "LintFinding",
     "OutputReviewer",
     "PhoneAgentDetector",
     "PhoneDetectionAgent",

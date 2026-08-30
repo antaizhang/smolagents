@@ -30,7 +30,7 @@ _CONDITION_KEYS = frozenset(
     {"labels", "destinations", "caller_roles", "purposes", "kinds", "min_confidence", "max_confidence"}
 )
 _RULE_KEYS = frozenset({"id", "action", "when", "reason", "alert", "restore_on_response"})
-_POLICY_KEYS = frozenset({"name", "version", "default_action", "default_reason", "rules", "expectations"})
+_POLICY_KEYS = frozenset({"name", "version", "default_action", "default_reason", "labels", "rules", "expectations"})
 
 
 class PolicyError(ValueError):
@@ -89,7 +89,7 @@ def _parse_condition(data: Any, where: str, known_labels: frozenset[str] | None)
             purposes=_as_frozenset(data.get("purposes"), f"{where}.purposes"),
             kinds=_as_frozenset(data.get("kinds"), f"{where}.kinds"),
             min_confidence=float(data.get("min_confidence", 0.0)),
-            max_confidence=float(data.get("max_confidence", 1.0)),
+            max_confidence=None if data.get("max_confidence") is None else float(data["max_confidence"]),
         )
     except (TypeError, ValueError) as error:
         raise PolicyError(f"{where}: {error}") from error
@@ -149,8 +149,20 @@ def _parse_expectation(data: Any, index: int) -> Expectation:
         raise PolicyError(f"{where}: {error}") from error
 
 
-def parse_policy(data: Mapping[str, Any], *, known_labels: frozenset[str] | None = KNOWN_LABELS) -> Policy:
-    """Build a :class:`~sensitiveguard.policy.model.Policy` from a mapping."""
+def parse_policy(
+    data: Mapping[str, Any], *, known_labels: frozenset[str] | None = KNOWN_LABELS, strict: bool = True
+) -> Policy:
+    """Build a :class:`~sensitiveguard.policy.model.Policy` from a mapping.
+
+    ``known_labels`` is the vocabulary a rule may name. A policy widens it with
+    its own ``labels:`` block, which is how a rule set written for a domain the
+    shipped detectors know nothing about — twenty-six personal-data fields, say —
+    states its vocabulary instead of being told every one of them is a typo.
+
+    ``strict`` runs the structural lint and refuses a policy with an error-level
+    finding, so a rule set that only works because of where a line happens to sit
+    in the file does not load.
+    """
 
     if not isinstance(data, Mapping):
         raise PolicyError(f"a policy must be a mapping, got {type(data).__name__}")
@@ -162,30 +174,55 @@ def parse_policy(data: Mapping[str, Any], *, known_labels: frozenset[str] | None
     if not isinstance(rules_data, list) or not rules_data:
         raise PolicyError("policy: `rules` must be a non-empty list")
 
-    rules = tuple(_parse_rule(rule, index, known_labels) for index, rule in enumerate(rules_data))
+    declared = _as_frozenset(data.get("labels"), "policy.labels")
+    for label in sorted(declared):
+        if label != label.upper():
+            raise PolicyError(f"policy.labels: label {label!r} must be upper-case")
+    vocabulary = None if known_labels is None else known_labels | declared
+
+    rules = tuple(_parse_rule(rule, index, vocabulary) for index, rule in enumerate(rules_data))
     expectations = tuple(_parse_expectation(item, index) for index, item in enumerate(data.get("expectations") or []))
     try:
-        return Policy(
+        policy = Policy(
             name=str(data["name"]),
             version=str(data["version"]),
             rules=rules,
             default_action=_as_action(data.get("default_action", Action.REVIEW.value), "policy.default_action"),
             default_reason=str(data.get("default_reason", "no rule matched; the policy fails closed")).strip(),
             expectations=expectations,
+            labels=declared,
         )
     except PolicyError:
         raise
     except (TypeError, ValueError) as error:
         raise PolicyError(f"policy: {error}") from error
 
+    if strict:
+        _enforce_lint(policy)
+    return policy
+
+
+def _enforce_lint(policy: Policy) -> None:
+    """Refuse a policy whose meaning depends on something other than its rules."""
+
+    from .engine import PolicyEngine
+
+    errors = [finding for finding in PolicyEngine(policy).lint() if finding.severity == "error"]
+    if errors:
+        rendered = "\n".join(f"  {finding.describe()}" for finding in errors)
+        raise PolicyError(f"policy {policy.label} does not pass the structural lint:\n{rendered}")
+
 
 def load_policy(
-    source: str | Path | Mapping[str, Any], *, known_labels: frozenset[str] | None = KNOWN_LABELS
+    source: str | Path | Mapping[str, Any],
+    *,
+    known_labels: frozenset[str] | None = KNOWN_LABELS,
+    strict: bool = True,
 ) -> Policy:
     """Load a policy from a path, a YAML string, or an already-parsed mapping."""
 
     if isinstance(source, Mapping):
-        return parse_policy(source, known_labels=known_labels)
+        return parse_policy(source, known_labels=known_labels, strict=strict)
     if isinstance(source, Path) or (
         isinstance(source, str) and "\n" not in source and source.endswith((".yaml", ".yml"))
     ):
@@ -203,7 +240,7 @@ def load_policy(
         data = yaml.safe_load(raw)
     except yaml.YAMLError as error:
         raise PolicyError(f"policy is not valid YAML: {error}") from error
-    return parse_policy(data, known_labels=known_labels)
+    return parse_policy(data, known_labels=known_labels, strict=strict)
 
 
 @lru_cache(maxsize=1)

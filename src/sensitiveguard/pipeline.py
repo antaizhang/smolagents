@@ -21,14 +21,16 @@ from dataclasses import dataclass
 from typing import Any
 
 from .agents import PrivilegedGuardAgent, QuarantinedDetectorAgent
+from .audit import AuditBus, Channel
 from .detection.base import DetectionReport, Detector
 from .detection.capability import CapabilityRouter
 from .facts import ContentKind
 from .policy.engine import PolicyEngine
 from .policy.loader import default_policy
-from .policy.model import Decision, Policy, RequestContext
+from .policy.model import Action, Decision, Policy, RequestContext
 from .quarantine import Quarantine, quarantine
 from .review import OutputReviewer, ReviewReport
+from .transform.handlers import TokenizeHandler
 from .transform.router import Disposition, DispositionRouter
 from .transform.vault import Restoration, TokenVault
 
@@ -110,6 +112,11 @@ class SensitiveGuard:
         unsettled and the rules decide what an unsettled span is worth.
     review_output:
         Run the output reviewer on every released result. On by default.
+    audit:
+        An :class:`~sensitiveguard.audit.AuditBus`. Pass one and every internal
+        boundary the content or its facts cross is recorded by digest, which is
+        what turns "did the output leak" into the much sharper "which channel
+        did it leak on". Leave it out and nothing is recorded.
     """
 
     def __init__(
@@ -123,8 +130,10 @@ class SensitiveGuard:
         reviewer: OutputReviewer | None = None,
         hash_salt: bytes | None = None,
         review_output: bool = True,
+        audit: AuditBus | None = None,
     ) -> None:
         self.policy = policy if policy is not None else default_policy()
+        self.audit = audit
         self.engine = PolicyEngine(self.policy)
         self.capability_router = (
             capability_router if capability_router is not None else CapabilityRouter.build(escalation=escalation)
@@ -132,14 +141,14 @@ class SensitiveGuard:
         self.dispatcher = (
             dispatcher
             if dispatcher is not None
-            else DispositionRouter(vault=vault if vault is not None else TokenVault(), hash_salt=hash_salt)
+            else DispositionRouter(vault=vault if vault is not None else TokenVault(audit=audit), hash_salt=hash_salt)
         )
         # Read the vault back off the dispatcher rather than keeping a second
         # reference: a guard whose `restore` looks in a different vault than its
         # tokeniser wrote to would fail silently, one round trip later.
         self.vault = self.dispatcher.vault
-        self.detector_agent = QuarantinedDetectorAgent(self.capability_router)
-        self.guard_agent = PrivilegedGuardAgent(self.engine, self.dispatcher)
+        self.detector_agent = QuarantinedDetectorAgent(self.capability_router, audit=audit)
+        self.guard_agent = PrivilegedGuardAgent(self.engine, self.dispatcher, audit=audit)
         self.reviewer = reviewer if reviewer is not None else OutputReviewer(self.capability_router)
         self.review_output = review_output
 
@@ -162,6 +171,16 @@ class SensitiveGuard:
         """
 
         sealed = quarantine(content, kind, origin=origin)
+        if self.audit is not None:
+            self.audit.record(
+                Channel.C1_INGRESS,
+                component="SensitiveGuard",
+                ref=sealed.ref,
+                payload_bytes=len(sealed),
+                carries_raw=True,
+                note=f"sealed from origin={sealed.origin}",
+                destination=destination,
+            )
         context = RequestContext(
             destination=destination,
             caller_role=caller_role,
@@ -182,6 +201,32 @@ class SensitiveGuard:
             decisions=decisions,
             disposition=disposition,
             review=review,
+        )
+
+    def with_audit(self, audit: AuditBus) -> SensitiveGuard:
+        """A guard with the same policy and detectors, recording onto ``audit``.
+
+        One bus per run, so a benchmark can ask where a value went in *this*
+        episode without every other episode's crossings in the way. The vault is
+        rebuilt with it rather than shared: a vault outliving the run it belongs
+        to is a mapping nobody is watching any more.
+        """
+
+        vault = TokenVault(audit=audit)
+        # Everything but the tokeniser is stateless and can be carried over,
+        # salts included so hashed keys stay comparable across runs. The
+        # tokeniser holds the vault, so it is the one that has to be rebound —
+        # a handler still writing into the previous vault would tokenise into a
+        # mapping this guard's `restore` cannot read.
+        handlers = dict(self.dispatcher.handlers)
+        handlers[Action.TOKENIZE] = TokenizeHandler(vault)
+        return SensitiveGuard(
+            policy=self.policy,
+            capability_router=self.capability_router,
+            dispatcher=DispositionRouter(vault=vault, handlers=handlers),
+            reviewer=self.reviewer,
+            review_output=self.review_output,
+            audit=audit,
         )
 
     def restore(self, text: str) -> Restoration:

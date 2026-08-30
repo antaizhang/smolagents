@@ -97,6 +97,10 @@ rules:
       the join and drops the content, one-way.
 
   # ------------------------------------------------------------ unsettled spans
+  #
+  # `max_confidence` is exclusive, so 0.5 belongs to the settled rules above and
+  # to nothing here: the two halves of the threshold do not overlap, and neither
+  # rule depends on sitting above the other to mean what it says.
   - id: unsettled-external
     when:
       destinations: [external_llm, third_party_api]
@@ -106,6 +110,12 @@ rules:
 
   - id: unsettled-internal
     when:
+      # Named in full rather than left blank. An `allow` that lists no
+      # destination allows to every destination, including the ones added to
+      # this file next year; what it usually means is "the destinations the
+      # rules above did not claim", and that is a fact about line numbers.
+      # `PolicyEngine.lint()` rejects an unscoped allow for this reason.
+      destinations: [user_document, internal_log, analytics, agent_memory]
       max_confidence: 0.5
     action: allow
     reason: An unsettled span that never leaves the trust boundary is not worth a reviewer's time.
@@ -201,5 +211,37 @@ expectations:
     destination: pastebin
     caller_role: agent
     purpose: tool_call
+    expect_action: review
+    expect_rule: __default__
+
+  # The three below pin regions that two rules both claim, where the file's
+  # order is what decides between them. `PolicyEngine.lint()` reports such a
+  # region as `order-sensitive` until an expectation covers it, and as
+  # `order-pinned` afterwards — so these are not spare tests, they are what
+  # keeps a reordering from passing the build.
+  - name: an address on a round trip tokenises rather than masking
+    label: EMAIL
+    confidence: 0.95
+    destination: external_llm
+    caller_role: agent
+    purpose: round_trip
+    expect_action: tokenize
+    expect_rule: contact-external-round-trip
+
+  - name: the settle threshold itself counts as settled
+    label: PHONE
+    confidence: 0.5
+    destination: external_llm
+    caller_role: agent
+    purpose: tool_call
+    expect_action: mask
+    expect_rule: phone-external-egress
+
+  - name: an unsettled span at a destination the allow does not name falls closed
+    label: PHONE
+    confidence: 0.35
+    destination: partner_crm
+    caller_role: service
+    purpose: sync
     expect_action: review
     expect_rule: __default__

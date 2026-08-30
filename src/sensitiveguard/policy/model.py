@@ -108,8 +108,16 @@ class Condition:
     """When a rule applies.
 
     An empty set matches anything, so a rule states only what it actually cares
-    about. Confidence is a closed interval: ``min_confidence`` is inclusive so a
-    threshold reads the way a reviewer expects it to.
+    about.
+
+    Confidence is a **half-open** interval ``[min_confidence, max_confidence)``.
+    Both ends inclusive would leave the boundary value claimed by two rules at
+    once — a rule that fires above a threshold and a rule that fires below it
+    would both match exactly the threshold — and which one won would come down
+    to which line sits higher in the file. Half-open means one threshold splits
+    the range into exactly two pieces, and no request lands in both.
+    ``max_confidence`` unset means no upper bound at all, so ``1.0`` still
+    matches.
     """
 
     labels: frozenset[str] = frozenset()
@@ -118,17 +126,19 @@ class Condition:
     purposes: frozenset[str] = frozenset()
     kinds: frozenset[str] = frozenset()
     min_confidence: float = 0.0
-    max_confidence: float = 1.0
+    max_confidence: float | None = None
 
     def __post_init__(self) -> None:
         if not 0.0 <= self.min_confidence <= 1.0:
             raise ValueError(f"min_confidence must be within [0, 1], got {self.min_confidence}")
+        if self.max_confidence is None:
+            return
         if not 0.0 <= self.max_confidence <= 1.0:
             raise ValueError(f"max_confidence must be within [0, 1], got {self.max_confidence}")
-        if self.min_confidence > self.max_confidence:
+        if self.min_confidence >= self.max_confidence:
             raise ValueError(
-                f"min_confidence {self.min_confidence} is above max_confidence {self.max_confidence}: "
-                "this condition can never match"
+                f"min_confidence {self.min_confidence} is not below max_confidence {self.max_confidence}: "
+                "the interval is half-open, so this condition can never match"
             )
 
     def evaluate(self, label: str, confidence: float, context: RequestContext) -> str | None:
@@ -146,8 +156,8 @@ class Condition:
                 return f"{name} {value!r} not in {{{', '.join(sorted(allowed))}}}"
         if confidence < self.min_confidence:
             return f"confidence {confidence:.2f} below min_confidence {self.min_confidence:.2f}"
-        if confidence > self.max_confidence:
-            return f"confidence {confidence:.2f} above max_confidence {self.max_confidence:.2f}"
+        if self.max_confidence is not None and confidence >= self.max_confidence:
+            return f"confidence {confidence:.2f} not below max_confidence {self.max_confidence:.2f}"
         return None
 
     def as_dict(self) -> dict[str, Any]:
@@ -158,7 +168,7 @@ class Condition:
                 data[name] = sorted(values)
         if self.min_confidence > 0.0:
             data["min_confidence"] = self.min_confidence
-        if self.max_confidence < 1.0:
+        if self.max_confidence is not None:
             data["max_confidence"] = self.max_confidence
         return data
 
@@ -263,6 +273,7 @@ class Policy:
     default_action: Action = Action.REVIEW
     default_reason: str = "no rule matched; the policy fails closed"
     expectations: tuple[Expectation, ...] = ()
+    labels: frozenset[str] = frozenset()
 
     def __post_init__(self) -> None:
         if not self.name.strip():
@@ -274,10 +285,37 @@ class Policy:
             if rule.id in seen:
                 raise ValueError(f"duplicate rule id {rule.id!r}")
             seen.add(rule.id)
+        for label in self.labels:
+            if not label or label != label.upper():
+                raise ValueError(f"declared label must be a non-empty upper-case name, got {label!r}")
 
     @property
     def rule_ids(self) -> tuple[str, ...]:
         return tuple(rule.id for rule in self.rules)
+
+    @property
+    def vocabulary(self) -> frozenset[str]:
+        """Every label this policy can be asked about.
+
+        The labels a rule names, plus the ones the file declares up front. A
+        policy for a benchmark whose fields are ``health_conditions`` and
+        ``marital_status`` declares them here; nothing forces those through the
+        label set the shipped detectors happen to emit.
+        """
+
+        named = {label for rule in self.rules for label in rule.condition.labels}
+        return frozenset(named | set(self.labels))
+
+    def destinations(self) -> frozenset[str]:
+        """Every destination named anywhere in the rules."""
+
+        return frozenset(dest for rule in self.rules for dest in rule.condition.destinations)
+
+    def caller_roles(self) -> frozenset[str]:
+        return frozenset(role for rule in self.rules for role in rule.condition.caller_roles)
+
+    def purposes(self) -> frozenset[str]:
+        return frozenset(purpose for rule in self.rules for purpose in rule.condition.purposes)
 
     def rule(self, rule_id: str) -> Rule | None:
         for rule in self.rules:
@@ -286,13 +324,16 @@ class Policy:
         return None
 
     def as_dict(self) -> dict[str, Any]:
-        return {
+        data: dict[str, Any] = {
             "name": self.name,
             "version": self.version,
             "default_action": self.default_action.value,
             "default_reason": self.default_reason,
             "rules": [rule.as_dict() for rule in self.rules],
         }
+        if self.labels:
+            data["labels"] = sorted(self.labels)
+        return data
 
     def fingerprint(self) -> str:
         """A content hash of the rules, for pinning a verdict to an exact policy.

@@ -55,13 +55,27 @@ def normalize_for_hash(value: str, label: str) -> str:
 
 
 class Handler(ABC):
-    """Carries out one action against one span's value."""
+    """Carries out one action against one value.
+
+    A handler needs the label and, for the reversible one, whether the mapping
+    should be written down. It has never needed the rest of a
+    :class:`~sensitiveguard.policy.model.Decision`, so :meth:`render` takes only
+    those two and :meth:`apply` unpacks a decision into them. The narrow
+    signature is what lets a caller that decided by label — an agent releasing a
+    typed field it holds, where there is no span and nothing was detected — reuse
+    the same transforms as the span path instead of growing a second set.
+    """
 
     action: Action
 
     @abstractmethod
-    def apply(self, value: str, decision: Decision) -> str:
+    def render(self, value: str, label: str, *, restore_on_response: bool = False) -> str:
         """Return what should stand in place of ``value``."""
+
+    def apply(self, value: str, decision: Decision) -> str:
+        """Carry out ``decision`` against the value in its span."""
+
+        return self.render(value, decision.label, restore_on_response=decision.restore_on_response)
 
     def __repr__(self) -> str:
         return f"<{type(self).__name__} action={self.action.value}>"
@@ -75,12 +89,13 @@ class MaskHandler(Handler):
     def __init__(self, *, styles: dict[str, tuple[int, int]] | None = None) -> None:
         self.styles = dict(MASK_STYLES if styles is None else styles)
 
-    def apply(self, value: str, decision: Decision) -> str:
-        if decision.label == "EMAIL" and "@" in value:
+    def render(self, value: str, label: str, *, restore_on_response: bool = False) -> str:
+        del restore_on_response
+        if label == "EMAIL" and "@" in value:
             local, _, domain = value.partition("@")
             keep = local[:1] if local else ""
             return f"{keep}{MASK_CHARACTER * max(len(local) - len(keep), 1)}@{domain}"
-        prefix, suffix = self.styles.get(decision.label, DEFAULT_MASK_STYLE)
+        prefix, suffix = self.styles.get(label, DEFAULT_MASK_STYLE)
         if len(value) <= prefix + suffix:
             return MASK_CHARACTER * len(value)
         hidden = len(value) - prefix - suffix
@@ -105,10 +120,11 @@ class HashHandler(Handler):
         self.digest_size = digest_size
         self.prefix = prefix
 
-    def apply(self, value: str, decision: Decision) -> str:
-        normalized = normalize_for_hash(value, decision.label)
+    def render(self, value: str, label: str, *, restore_on_response: bool = False) -> str:
+        del restore_on_response
+        normalized = normalize_for_hash(value, label)
         digest = hashlib.blake2b(normalized.encode("utf-8"), key=self.salt, digest_size=16).hexdigest()
-        return f"<{decision.label}:{self.prefix}:{digest[: self.digest_size]}>"
+        return f"<{label}:{self.prefix}:{digest[: self.digest_size]}>"
 
 
 class TokenizeHandler(Handler):
@@ -119,8 +135,8 @@ class TokenizeHandler(Handler):
     def __init__(self, vault: TokenVault) -> None:
         self.vault = vault
 
-    def apply(self, value: str, decision: Decision) -> str:
-        return self.vault.tokenize(value, decision.label, restorable=decision.restore_on_response)
+    def render(self, value: str, label: str, *, restore_on_response: bool = False) -> str:
+        return self.vault.tokenize(value, label, restorable=restore_on_response)
 
 
 def default_handlers(vault: TokenVault, *, hash_salt: bytes | None = None) -> dict[Action, Handler]:

@@ -18,4 +18,9 @@ fi
 "$PY" -m pytest tests/sensitiveguard -q -p no:cacheprovider
 "$PY" -m compileall -q src/sensitiveguard examples/sensitiveguard
 
-echo "Phone detection Agent verification passed."
+# The benchmark policies must pass the structural lint, and the six external
+# benchmarks must run end to end (no network, well under a second).
+"$PY" -m sensitiveguard.eval lint
+"$PY" -m sensitiveguard.eval run >/dev/null
+
+echo "Phone detection Agent and benchmark verification passed."

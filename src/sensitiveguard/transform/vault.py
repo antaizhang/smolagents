@@ -18,6 +18,8 @@ import re
 import secrets
 from dataclasses import dataclass
 
+from ..audit import AuditBus, Channel
+
 
 TOKEN_PATTERN = re.compile(r"\[\[([A-Z][A-Z0-9_]*)_([0-9a-f]{8,32})\]\]")
 
@@ -44,12 +46,13 @@ class TokenVault:
     about the value even to someone who can guess it.
     """
 
-    def __init__(self, *, salt: bytes | None = None, digest_size: int = 8) -> None:
+    def __init__(self, *, salt: bytes | None = None, digest_size: int = 8, audit: AuditBus | None = None) -> None:
         if not 8 <= digest_size <= 32:
             raise ValueError(f"digest_size must be within [8, 32], got {digest_size}")
         self._salt = salt if salt is not None else secrets.token_bytes(16)
         self._digest_size = digest_size
         self._values: dict[str, str] = {}
+        self._audit = audit
 
     def __len__(self) -> int:
         return len(self._values)
@@ -70,6 +73,20 @@ class TokenVault:
         token = self.token_for(value, label)
         if restorable:
             self._values[token] = value
+        if self._audit is not None:
+            # The vault is the one place in the system that keeps a way back
+            # from a placeholder to a value, so it is worth an audit record even
+            # when nothing goes wrong: a restorable mapping is a stored secret
+            # with a lifetime, and the trail is where its lifetime is visible.
+            self._audit.record(
+                Channel.C4_VAULT_MAPPING,
+                component="TokenVault",
+                ref=token,
+                labels=(label,),
+                values=(value,) if restorable else (),
+                carries_raw=restorable,
+                note="restorable mapping written" if restorable else "pseudonym only, no way back",
+            )
         return token
 
     def restore(self, token: str) -> str | None:
@@ -103,6 +120,12 @@ class TokenVault:
     def clear(self) -> None:
         """Forget every mapping. Call this when a session ends."""
 
+        if self._audit is not None and self._values:
+            self._audit.record(
+                Channel.C4_VAULT_MAPPING,
+                component="TokenVault",
+                note=f"cleared {len(self._values)} mapping(s)",
+            )
         self._values.clear()
 
     def __repr__(self) -> str:
