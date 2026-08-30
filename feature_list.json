@@ -48,6 +48,56 @@
       ],
       "status": "done",
       "evidence": "./init.sh: Ruff clean, format clean, 169 focused tests passed, compileall passed (2026-08-30)."
+    },
+    {
+      "id": "feat-006",
+      "name": "Open policy label vocabulary",
+      "description": "A policy declares its own labels, so a rule set written for a domain the shipped detectors know nothing about (26 personal-data fields) states its vocabulary rather than falling through to the default. Confidence intervals are half-open [min, max) so one threshold splits the range into exactly two pieces and no request lands in two rules at once.",
+      "dependencies": [
+        "feat-003"
+      ],
+      "status": "done",
+      "evidence": "./init.sh: Ruff clean, format clean, 219 tests passed, compileall passed, 3 policies lint clean, 6 benchmarks run (2026-08-30)."
+    },
+    {
+      "id": "feat-007",
+      "name": "Structural policy lint and unscoped-allow invariant",
+      "description": "PolicyEngine.lint() reports unreachable rules, allow rules that name no destination, and order-sensitive rule pairs each with a verified witness; a witnessed pair downgrades to order-pinned once an expectation covers it. load_policy(strict=True) refuses a policy with an error-level finding.",
+      "dependencies": [
+        "feat-006"
+      ],
+      "status": "done",
+      "evidence": "./init.sh: Ruff clean, format clean, 219 tests passed, compileall passed, 3 policies lint clean, 6 benchmarks run (2026-08-30)."
+    },
+    {
+      "id": "feat-008",
+      "name": "Internal-channel audit bus",
+      "description": "An AuditBus records every internal crossing (C1 ingress through C6 egress) by keyed per-run digest, enough to answer whether a specific secret crossed a channel without the trail itself holding the value. Facts-only channels (C2, C3) are asserted to carry no raw value.",
+      "dependencies": [
+        "feat-005"
+      ],
+      "status": "done",
+      "evidence": "./init.sh: Ruff clean, format clean, 219 tests passed, compileall passed, 3 policies lint clean, 6 benchmarks run (2026-08-30)."
+    },
+    {
+      "id": "feat-009",
+      "name": "Benchmark agent runtime with an injection channel and a way out",
+      "description": "A tool surface with untrusted readers (origin=tool_result) and outward egress actions, a quarantined planner that plans from facts and a naive planner that obeys tool content, and a no-defence baseline runtime. Routing cost is measured per case.",
+      "dependencies": [
+        "feat-008"
+      ],
+      "status": "done",
+      "evidence": "./init.sh: Ruff clean, format clean, 219 tests passed, compileall passed, 3 policies lint clean, 6 benchmarks run (2026-08-30)."
+    },
+    {
+      "id": "feat-010",
+      "name": "Six external benchmarks",
+      "description": "AirGapAgent-R (contextual-integrity grid), PrivacyLens (over-sharing), AgentDAM (web-agent minimisation plus routing cost), AgentLeak (internal-channel leak), AgentDojo and ASB (prompt injection against a mandatory no-defence baseline). One command runs all six offline; each takes --data for a real upstream release.",
+      "dependencies": [
+        "feat-009"
+      ],
+      "status": "done",
+      "evidence": "./init.sh: Ruff clean, format clean, 219 tests passed, compileall passed, 3 policies lint clean, 6 benchmarks run (2026-08-30)."
     }
   ]
 }

@@ -4,7 +4,7 @@ Facts come in, verdicts go out, and the path between them is a file that can be
 reviewed, versioned, diffed and tested. No model participates in the decision.
 """
 
-from .engine import ExpectationFailure, PolicyEngine
+from .engine import ExpectationFailure, LintFinding, PolicyEngine
 from .loader import (
     DEFAULT_POLICY_PATH,
     PolicyDiff,
@@ -43,6 +43,7 @@ __all__ = [
     "Decision",
     "Expectation",
     "ExpectationFailure",
+    "LintFinding",
     "Policy",
     "PolicyDiff",
     "PolicyEngine",

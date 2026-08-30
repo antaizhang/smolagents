@@ -25,6 +25,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
+from .audit import AuditBus, Channel
 from .detection.base import DetectionReport
 from .detection.capability import CapabilityRouter
 from .facts import Finding
@@ -43,8 +44,9 @@ class QuarantinedDetectorAgent:
     carry a sentence across.
     """
 
-    def __init__(self, router: CapabilityRouter) -> None:
+    def __init__(self, router: CapabilityRouter, *, audit: AuditBus | None = None) -> None:
         self.router = router
+        self.audit = audit
 
     def inspect(self, sealed: Quarantine) -> DetectionReport:
         """Run the chain for this content's declared kind."""
@@ -53,6 +55,23 @@ class QuarantinedDetectorAgent:
             raise TypeError("the quarantined agent only accepts sealed content")
         report = self.router.detect(sealed)
         _assert_facts_only(report.findings)
+        if self.audit is not None:
+            # What crosses here is the whole point of the boundary, so it is
+            # worth recording what it looked like: the labels, and — for the
+            # leak probe — a digest of the values the spans refer to. The
+            # digest is computed on this side, where the content already is;
+            # nothing downstream gains access to a value by reading the trail.
+            self.audit.record(
+                Channel.C2_DETECTOR_TO_POLICY,
+                component="QuarantinedDetectorAgent",
+                ref=sealed.ref,
+                labels=report.labels(),
+                values=[finding.value_in(sealed.unseal()) for finding in report.findings],
+                carries_raw=False,
+                note=f"{len(report.findings)} fact(s)",
+                escalation_calls=report.escalation_calls,
+                tiers_run=list(report.tiers_run),
+            )
         return report
 
     def __repr__(self) -> str:
@@ -68,9 +87,10 @@ class PrivilegedGuardAgent:
     ``tests/sensitiveguard`` asserts that it never starts to.
     """
 
-    def __init__(self, engine: PolicyEngine, dispatcher: DispositionRouter) -> None:
+    def __init__(self, engine: PolicyEngine, dispatcher: DispositionRouter, *, audit: AuditBus | None = None) -> None:
         self.engine = engine
         self.dispatcher = dispatcher
+        self.audit = audit
 
     def decide(self, report: DetectionReport, context: RequestContext) -> tuple[Decision, ...]:
         """Turn facts into verdicts through the policy engine."""
@@ -81,6 +101,16 @@ class PrivilegedGuardAgent:
     def dispatch(self, sealed: Quarantine, decisions: Iterable[Decision]) -> Disposition:
         """Hand the verdicts and the sealed content to the disposition router."""
 
+        decisions = tuple(decisions)
+        if self.audit is not None:
+            self.audit.record(
+                Channel.C3_POLICY_TO_TRANSFORM,
+                component="PrivilegedGuardAgent",
+                ref=sealed.ref,
+                labels=tuple(decision.label for decision in decisions),
+                carries_raw=False,
+                note=", ".join(f"{d.action.value}:{d.rule_id}" for d in decisions) or "no verdicts",
+            )
         return self.dispatcher.apply(sealed, decisions)
 
     def __repr__(self) -> str:

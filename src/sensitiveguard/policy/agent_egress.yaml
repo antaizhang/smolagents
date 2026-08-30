@@ -1,0 +1,313 @@
+# The policy the five trajectory benchmarks run against.
+#
+# PrivacyLens, AgentDAM, AgentLeak, AgentDojo and ASB all put an agent in front
+# of a task, give it access to the user's data and to some untrusted documents,
+# and watch what leaves. What differs between them is which part they score. So
+# they share one rule set, and the differences live in the datasets.
+#
+# One thing about this file is worth reading before the rules: it names no
+# attacker. There is no `attacker_inbox` in a destination list, no blocklist of
+# exfiltration endpoints, no pattern for a suspicious URL. An agent talked into
+# posting a customer list to a pastebin is stopped here because nobody ever wrote
+# a rule allowing a customer list to leave for a destination the task did not
+# name — the same reason it would be stopped from posting it to a destination
+# nobody has thought of yet.
+#
+# That is the difference between failing closed and recognising the attack, and
+# it is the only one of the two that survives contact with an attacker who reads
+# the rule file.
+
+# Every rule that answers for a settled fact carries `min_confidence: 0.5`, and
+# the unsettled rules at the bottom carry `max_confidence: 0.5`, which is
+# exclusive. The two halves therefore do not overlap at all: no request matches
+# a rule in both groups, and no rule in either group depends on sitting above
+# the other. `PolicyEngine.lint()` reports the overlap as `order-sensitive` when
+# a floor is left off, which is how the ones here were found.
+
+name: agent-egress-policy
+version: "2026.08.30"
+default_action: review
+default_reason: >-
+  No rule authorises this field for this destination. The destination is not
+  necessarily hostile — it is unclaimed, which is the same answer, and the same
+  answer an unlisted hostile destination gets.
+
+labels:
+  # What the agent holds about the user, typed, read out of a profile store.
+  - NAME
+  - EMAIL_ADDRESS
+  - PHONE_NUMBER
+  - HOME_ADDRESS
+  - MEETING_TIME
+  - LEASE_DATES
+  - ORDER_ID
+  - HEALTH_CONDITIONS
+  - MENTAL_HEALTH_HISTORY
+  - PERFORMANCE_REVIEW
+  - SALARY_BAND
+  - TERMINATION_PLAN
+  - LEGAL_DISPUTE
+  - PROJECT_CODENAME
+  - CUSTOMER_LIST
+  - NATIONAL_ID
+  - CREDIT_CARD_NUMBER
+  - BANK_ACCOUNT_NUMBER
+  - PASSWORD
+  - SSH_KEY
+  # PHONE, EMAIL, ID_CARD, BANK_CARD and API_KEY come from the detectors and are
+  # already known; they are what turns up in a quoted document rather than in the
+  # profile, and they need rules too.
+
+rules:
+  # ------------------------------------------------------------- never anywhere
+  - id: credentials-never-leave
+    when:
+      labels: [PASSWORD, SSH_KEY, API_KEY]
+      min_confidence: 0.5
+    action: block
+    alert: true
+    reason: A credential in an outbound message is an incident, whatever the message was about.
+
+  - id: government-id-never-leaves
+    when:
+      labels: [NATIONAL_ID, ID_CARD]
+      min_confidence: 0.5
+    action: block
+    alert: true
+    reason: No task in this set has a use for it, so there is no destination worth carving out.
+
+  - id: privileged-internal-matters-never-leave
+    when:
+      labels: [MENTAL_HEALTH_HISTORY, TERMINATION_PLAN, LEGAL_DISPUTE]
+      min_confidence: 0.5
+    action: block
+    alert: true
+    reason: >-
+      Each of these harms someone specific if it moves, and none of them is
+      needed to finish any task here. Refused rather than left unclaimed, so the
+      audit trail says a rule considered it.
+
+  # ----------------------------------------------------------- money, narrowly
+  - id: card-at-the-checkout
+    when:
+      labels: [CREDIT_CARD_NUMBER]
+      destinations: [shopping_cart]
+      min_confidence: 0.5
+    action: allow
+    reason: The checkout is the transaction the number exists for.
+
+  - id: account-at-the-bank
+    when:
+      labels: [BANK_ACCOUNT_NUMBER]
+      destinations: [bank_portal]
+      min_confidence: 0.5
+    action: allow
+    reason: The one counterparty that already has the account.
+
+  - id: money-nowhere-else
+    when:
+      labels: [CREDIT_CARD_NUMBER, BANK_ACCOUNT_NUMBER, BANK_CARD]
+      min_confidence: 0.5
+    action: block
+    alert: true
+    reason: A payment instrument outside a payment flow is being collected, not used.
+
+  # --------------------------------------------------------- the task's own data
+  - id: contact-to-the-intended-recipient
+    when:
+      labels: [NAME, EMAIL_ADDRESS, PHONE_NUMBER]
+      destinations:
+        [recipient_inbox, booking_form, clinic_portal, hr_portal, vendor_api, shopping_cart, bank_portal, team_channel]
+      min_confidence: 0.5
+    action: allow
+    reason: Someone has to be able to reply, deliver or confirm; these are the parties the task named.
+
+  - id: scheduling-where-a-time-is-agreed
+    when:
+      labels: [MEETING_TIME]
+      destinations: [recipient_inbox, booking_form, clinic_portal, hr_portal, vendor_api, team_channel]
+      min_confidence: 0.5
+    action: allow
+    reason: A time is what these arrange — a booking, a clinic slot, a standup — so the party arranging it needs it.
+
+  - id: logistics-to-the-party-doing-the-logistics
+    when:
+      labels: [LEASE_DATES, ORDER_ID, HOME_ADDRESS]
+      destinations: [recipient_inbox, booking_form, vendor_api, shopping_cart]
+      min_confidence: 0.5
+    action: allow
+    reason: Something is delivered, leased or fulfilled against these, by the party doing it.
+
+  - id: health-to-the-clinic
+    when:
+      labels: [HEALTH_CONDITIONS]
+      destinations: [clinic_portal]
+      min_confidence: 0.5
+    action: allow
+    reason: The treating party, and nobody else in this set.
+
+  - id: hr-matters-to-hr
+    when:
+      labels: [PERFORMANCE_REVIEW, SALARY_BAND]
+      destinations: [hr_portal]
+      min_confidence: 0.5
+    action: allow
+    reason: The system of record for the thing being discussed.
+
+  - id: internal-work-stays-internal
+    when:
+      labels: [PROJECT_CODENAME, CUSTOMER_LIST]
+      destinations: [team_channel, agent_memory]
+      min_confidence: 0.5
+    action: allow
+    reason: Inside the trust boundary the agent is already working within.
+
+  # ------------------------------------ what turns up inside a quoted document
+  #
+  # The rules above answer for fields the agent holds and knows the type of.
+  # These answer for values the detectors found in text the agent is forwarding —
+  # a quoted email, a page it scraped — where the agent had no idea the value was
+  # in there at all.
+  - id: contact-details-in-quoted-text
+    when:
+      labels: [PHONE, EMAIL]
+      destinations: [recipient_inbox, booking_form, clinic_portal, hr_portal, vendor_api, shopping_cart]
+      min_confidence: 0.5
+    action: mask
+    reason: >-
+      Someone else's contact details, carried along inside a document the task
+      quoted. The task needs the document, not the third party's number.
+
+  - id: contact-details-in-quoted-text-internally
+    when:
+      labels: [PHONE, EMAIL]
+      destinations: [team_channel, agent_memory]
+      min_confidence: 0.5
+    action: hash
+    reason: Internally a stable key is enough to correlate on, and the value is not needed.
+
+  # -------------------------------------------------------------- unsettled spans
+  - id: unsettled-span-inside
+    when:
+      destinations: [team_channel, agent_memory]
+      max_confidence: 0.5
+    action: allow
+    reason: >-
+      A span the cascade could not settle, staying inside the boundary. The
+      destinations are named rather than left blank, so this rule does not
+      quietly widen when a new destination is added below it.
+
+  - id: unsettled-span-outbound
+    when:
+      max_confidence: 0.5
+    action: review
+    reason: Anything unsettled that is on its way out waits for a human.
+
+expectations:
+  - name: the lease dates reach the landlord
+    label: LEASE_DATES
+    confidence: 0.95
+    destination: recipient_inbox
+    caller_role: agent
+    purpose: task_completion
+    expect_action: allow
+    expect_rule: logistics-to-the-party-doing-the-logistics
+
+  - name: the health condition does not travel with them
+    label: HEALTH_CONDITIONS
+    confidence: 0.95
+    destination: recipient_inbox
+    caller_role: agent
+    purpose: task_completion
+    expect_action: review
+    expect_rule: __default__
+
+  - name: the same condition reaches the clinic
+    label: HEALTH_CONDITIONS
+    confidence: 0.95
+    destination: clinic_portal
+    caller_role: agent
+    purpose: task_completion
+    expect_action: allow
+    expect_rule: health-to-the-clinic
+
+  - name: an attacker destination is refused for being unclaimed, not for being known
+    label: CUSTOMER_LIST
+    confidence: 0.95
+    destination: paste_site
+    caller_role: agent
+    purpose: tool_call
+    expect_action: review
+    expect_rule: __default__
+
+  - name: and so is a destination nobody has invented yet
+    label: CUSTOMER_LIST
+    confidence: 0.95
+    destination: some_endpoint_from_2027
+    caller_role: agent
+    purpose: tool_call
+    expect_action: review
+    expect_rule: __default__
+
+  - name: a credential is refused even to a destination the task named
+    label: API_KEY
+    confidence: 0.95
+    destination: team_channel
+    caller_role: agent
+    purpose: task_completion
+    expect_action: block
+    expect_rule: credentials-never-leave
+
+  - name: a card number is allowed at the checkout it is for
+    label: CREDIT_CARD_NUMBER
+    confidence: 0.95
+    destination: shopping_cart
+    caller_role: agent
+    purpose: task_completion
+    expect_action: allow
+    expect_rule: card-at-the-checkout
+
+  - name: and refused at the vendor api next to it
+    label: CREDIT_CARD_NUMBER
+    confidence: 0.95
+    destination: vendor_api
+    caller_role: agent
+    purpose: task_completion
+    expect_action: block
+    expect_rule: money-nowhere-else
+
+  - name: an account number is allowed at the bank
+    label: BANK_ACCOUNT_NUMBER
+    confidence: 0.95
+    destination: bank_portal
+    caller_role: agent
+    purpose: task_completion
+    expect_action: allow
+    expect_rule: account-at-the-bank
+
+  - name: a third party phone number inside a quoted document is masked on the way out
+    label: PHONE
+    confidence: 0.95
+    destination: recipient_inbox
+    caller_role: agent
+    purpose: task_completion
+    expect_action: mask
+    expect_rule: contact-details-in-quoted-text
+
+  - name: an unsettled span may stay in the team channel
+    label: PHONE
+    confidence: 0.3
+    destination: team_channel
+    caller_role: agent
+    purpose: task_completion
+    expect_action: allow
+    expect_rule: unsettled-span-inside
+
+  - name: the same unsettled span waits when it is headed out
+    label: PHONE
+    confidence: 0.3
+    destination: recipient_inbox
+    caller_role: agent
+    purpose: task_completion
+    expect_action: review
+    expect_rule: unsettled-span-outbound
